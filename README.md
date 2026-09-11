@@ -206,6 +206,28 @@ not exist read as `NaN` and are listed in `gear.missing`; pass
 On an Apple M5 (Node 26, C172, `npm run bench:property-batch`), reading 15
 properties took 3.58 µs with `getPropertyValue()` and 0.14 µs with a batch.
 
+### Gear contact state
+
+`createGearContactReader()` returns a read-only snapshot of every landing-gear
+and contact unit after the last `run()`: weight on wheels, strut compression,
+compression velocity and force, contact location relative to the CG, wheel
+roll/side velocity, slip and steering angles, and the roll/side and body-axis
+reaction forces JSBSim applied.
+
+```ts
+import { GEAR_CONTACT_FIELDS } from "@0x62/jsbsim-wasm";
+
+const contacts = sdk.createGearContactReader();
+sdk.run();
+const values = contacts.read(); // contacts.count * contacts.stride numbers
+const noseGear = contacts.readUnit(0); // { wow, strutForceLbs, wheelRollForceLbs, ... }
+```
+
+Units and signs are JSBSim's (ft, ft/s, lbf, deg); a supporting strut reports a
+negative force, and the body forces of all units sum to
+`forces/fb{x,y,z}-gear-lbs`. Reading never changes the simulation. Readers are
+detached automatically by `sdk.destroy()`.
+
 ## Testing
 
 ```bash
@@ -291,7 +313,7 @@ The binding generator parses `FGFDMExec.h` and emits:
 
 Most public `FGFDMExec` methods are exposed automatically; a small ignore list is used for methods that are not useful in this SDK context (for example output file-name overrides). For complex native types that are not JS-safe, opaque numeric handles are used.
 
-Hand-written bindings that go beyond `FGFDMExec` live in `bindings/*.cpp` and are compiled into the same module (`PropertyBatch`). They are not regenerated.
+Hand-written bindings that go beyond `FGFDMExec` live in `bindings/*.cpp` and are compiled into the same module (`PropertyBatch`, `GearContacts`). They are not regenerated.
 
 ## License
 

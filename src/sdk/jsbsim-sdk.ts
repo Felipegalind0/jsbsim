@@ -2,6 +2,7 @@ import type { FGFDMExecApi } from "../generated/fgfdmexec-api";
 import { JSBSimApi } from "../generated/jsbsim-api";
 import type { BinaryLike, JSBSimLogEntry, JSBSimRuntimeModule, JSBSimSdkOptions } from "./types";
 import { loadJSBSimModule } from "./load-module";
+import { GearContactReader } from "./gear-contacts";
 import { PropertyBatch, type PropertyBatchOptions } from "./property-batch";
 import { WasmVfsManager } from "./vfs";
 
@@ -30,6 +31,7 @@ export class JSBSimSdk extends JSBSimApi {
   readonly module: JSBSimRuntimeModule;
   readonly vfs: WasmVfsManager;
   private readonly logListeners: Record<JSBSimSdkLogEvent, Set<JSBSimSdkLogListener>>;
+  private readonly gearReaders = new Set<GearContactReader>();
 
   private constructor(module: JSBSimRuntimeModule, exec: FGFDMExecApi, vfs: WasmVfsManager) {
     super(exec);
@@ -184,6 +186,21 @@ export class JSBSimSdk extends JSBSimApi {
   }
 
   /**
+   * Creates a read-only per-gear contact reader for the loaded model.
+   *
+   * Readers are detached automatically by `destroy()`.
+   */
+  createGearContactReader(): GearContactReader {
+    if (!this.module.GearContacts) {
+      throw new Error("This JSBSim wasm build does not include GearContacts bindings.");
+    }
+    const reader: GearContactReader = new GearContactReader(new this.module.GearContacts(this.exec),
+      () => this.gearReaders.delete(reader));
+    this.gearReaders.add(reader);
+    return reader;
+  }
+
+  /**
    * Writes data to MEMFS (relative to runtime root) and returns resolved path.
    */
   writeDataFile(path: string, data: BinaryLike): string {
@@ -229,6 +246,8 @@ export class JSBSimSdk extends JSBSimApi {
    * Destroys the underlying wasm-bound exec instance.
    */
   destroy(): void {
+    // Readers hold a raw FGFDMExec pointer; detach them before it is freed.
+    for (const reader of [...this.gearReaders]) reader.detach();
     this.module.destroy?.(this.exec);
     this.logListeners.stdout.clear();
     this.logListeners.stderr.clear();

@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { JSBSimSdk, PropertyBatch } from "../dist/index.js";
+import { GEAR_CONTACT_FIELDS, JSBSimSdk, PropertyBatch } from "../dist/index.js";
 import { wasmBinaryUrl, wasmModuleUrl } from "../dist/wasm.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,5 +101,71 @@ describe("PropertyBatch", () => {
     batch.dispose();
     assert.throws(() => batch.read(), /disposed/);
     batch.dispose();
+  });
+});
+
+describe("GearContactReader", () => {
+  it("matches JSBSim's own gear properties and sums to its total gear force", async () => {
+    const sdk = await createC172();
+    try {
+      const reader = sdk.createGearContactReader();
+      assert.equal(reader.stride, GEAR_CONTACT_FIELDS.length);
+      const field = name => GEAR_CONTACT_FIELDS.indexOf(name);
+      let grounded = 0;
+      for (let step = 0; step < 360; step++) {
+        assert.equal(sdk.run(), true);
+        const values = reader.read();
+        const units = reader.count;
+        assert.equal(values.length, units * reader.stride);
+        const total = { x: 0, y: 0, z: 0 };
+        for (let unit = 0; unit < units; unit++) {
+          const at = name => values[unit * reader.stride + field(name)];
+          const property = name => sdk.getPropertyValue(`gear/unit[${unit}]/${name}`);
+          assert.equal(at("wow"), property("WOW"));
+          assert.equal(at("compressionFt"), property("compression-ft"));
+          assert.equal(at("compressionVelocityFps"), property("compression-velocity-fps"));
+          if (at("isBogey") === 1) {
+            assert.equal(at("wheelRollVelocityFps"), property("wheel-speed-fps"));
+            assert.equal(at("slipAngleDeg"), property("slip-angle-deg"));
+          }
+          if (at("wow") === 1) {
+            grounded += 1;
+            // JSBSim's sign convention: a supporting strut pushes with negative force.
+            assert.ok(at("strutForceLbs") < 0);
+          }
+          total.x += at("bodyForceXLbs");
+          total.y += at("bodyForceYLbs");
+          total.z += at("bodyForceZLbs");
+        }
+        const close = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b));
+        assert.ok(close(total.x, sdk.getPropertyValue("forces/fbx-gear-lbs")), `fbx at step ${step}`);
+        assert.ok(close(total.y, sdk.getPropertyValue("forces/fby-gear-lbs")), `fby at step ${step}`);
+        assert.ok(close(total.z, sdk.getPropertyValue("forces/fbz-gear-lbs")), `fbz at step ${step}`);
+      }
+      assert.ok(grounded > 0, "the fixture must include gear contact");
+      const nose = reader.readUnit(0);
+      assert.equal(typeof nose.strutForceLbs, "number");
+      assert.throws(() => reader.readUnit(99), RangeError);
+      reader.dispose();
+      assert.throws(() => reader.read(), /disposed/);
+    } finally { sdk.destroy(); }
+  });
+
+  it("never changes the simulation it reads", async () => {
+    const trajectory = async (withReader) => {
+      const sdk = await createC172();
+      const reader = withReader ? sdk.createGearContactReader() : null;
+      const samples = [];
+      for (let step = 0; step < 480; step++) {
+        sdk.run();
+        reader?.read();
+        reader?.readUnit(1);
+        if (step % 20 === 0) samples.push(["position/h-agl-ft", "velocities/u-fps", "velocities/q-rad_sec"].map(name => sdk.getPropertyValue(name)));
+      }
+      sdk.destroy(); // Also detaches the reader.
+      if (reader) assert.throws(() => reader.read(), /disposed/);
+      return samples;
+    };
+    assert.deepEqual(await trajectory(true), await trajectory(false));
   });
 });

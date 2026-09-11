@@ -51,7 +51,15 @@ for (const count of counts) {
     speedup: (median(samples.perCall) / median(samples.batched)).toFixed(1) + "×" });
   batch.dispose();
 }
+const reader = sdk.createGearContactReader();
+const gearTime = n => { const start = performance.now(); for (let r = 0; r < n; r++) sink += reader.read()[0]; return (performance.now() - start) * 1000 / n; };
+gearTime(20_000);
+const gearSamples = Array.from({ length: 11 }, () => gearTime(20_000)).sort((a, b) => a - b);
+const gearUnits = reader.count;
+reader.dispose();
+
 console.log(`${os.cpus()[0]?.model} · ${os.platform()} ${os.arch()} · Node ${process.version}`);
 console.table(results);
+console.log(`GearContactReader.read(): ${gearSamples[5].toFixed(3)} µs for all ${gearUnits} contact units (${reader.stride} fields each)`);
 if (!Number.isFinite(sink)) throw new Error("unexpected non-finite sum");
 sdk.destroy();
