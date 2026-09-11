@@ -2,6 +2,7 @@ import type { FGFDMExecApi } from "../generated/fgfdmexec-api";
 import { JSBSimApi } from "../generated/jsbsim-api";
 import type { BinaryLike, JSBSimLogEntry, JSBSimRuntimeModule, JSBSimSdkOptions } from "./types";
 import { loadJSBSimModule } from "./load-module";
+import { PropertyBatch, type PropertyBatchOptions } from "./property-batch";
 import { WasmVfsManager } from "./vfs";
 
 export interface ConfigurePathsOptions {
@@ -168,6 +169,18 @@ export class JSBSimSdk extends JSBSimApi {
    */
   loadScriptWithDefaults(path: string, deltaT = 0, initFile = ""): boolean {
     return this.loadScript(path, deltaT, initFile);
+  }
+
+  /**
+   * Resolves property paths once for fast repeated reads/writes.
+   *
+   * Prefer this over many `getPropertyValue()` calls per simulation step.
+   */
+  createPropertyBatch(paths: readonly string[], options: PropertyBatchOptions = {}): PropertyBatch {
+    if (!this.module.PropertyBatch) {
+      throw new Error("This JSBSim wasm build does not include PropertyBatch bindings.");
+    }
+    return new PropertyBatch(new this.module.PropertyBatch(this.exec), paths, options);
   }
 
   /**

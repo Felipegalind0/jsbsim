@@ -1,4 +1,5 @@
 import type { FGFDMExecApi } from "../generated/fgfdmexec-api";
+import type { NativePropertyBatch } from "./property-batch";
 
 export type BinaryLike = Uint8Array | ArrayBuffer | string;
 
@@ -30,6 +31,8 @@ export interface EmscriptenFs {
 
 export interface JSBSimRuntimeModule {
   FGFDMExec: new () => FGFDMExecApi;
+  /** Absent in wasm builds that predate `bindings/PropertyBatchBindings.cpp`. */
+  PropertyBatch?: new (exec: FGFDMExecApi) => NativePropertyBatch;
   FS: EmscriptenFs;
   destroy?(value: unknown): void;
 }
