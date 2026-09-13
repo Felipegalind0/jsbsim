@@ -1,57 +1,39 @@
 # JSBSim WASM Tooling + TypeScript SDK
 
-This repository builds [JSBSim](https://github.com/JSBSim-Team/jsbsim) to WebAssembly for Node.js and browsers, and ships a TypeScript SDK for loading and interacting with `FGFDMExec`.
+This fork builds the pinned integration source from [Felipegalind0/jsbsim](https://github.com/Felipegalind0/jsbsim) to WebAssembly for Node.js and browsers, and ships a TypeScript SDK for loading and interacting with `FGFDMExec`. Native JSBSim originates with [JSBSim-Team/jsbsim](https://github.com/JSBSim-Team/jsbsim); this wrapper preserves the upstream SDK authorship.
 
 > [!WARNING]  
 > This toolkit is still in early development and may contain bugs or unexpected behavior.
 
-**Demo: https://0x62.github.io/jsbsim-wasm/**
+**Upstream SDK demo: https://0x62.github.io/jsbsim-wasm/** (not this fork’s identified artifact)
 
 ## Highlights
 
-- JSBSim is tracked as a git submodule at `vendor/jsbsim`.
+- Native source is pinned by commit, archive SHA-256 and extracted-content digest in `jsbsim-source.lock.json`.
 - `FGFDMExec` bindings are generated automatically from `FGFDMExec.h`.
 - No static data preloading is used.
 - Runtime data lives in Emscripten MEMFS for speed.
 - Optional persistence is available through IDBFS sync (browser).
 - SDK package output is ESM-first.
 
-## Installation
+## Installation and build
+
+The local fork package is `@felipegalind0/jsbsim-wasm`, initially `1.2.4-fork.1`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
+
+Use the Node, npm, CMake and Emscripten versions in `build-toolchain.lock.json`, with `emcmake` and `em++` in `PATH`:
 
 ```bash
-npm install --save @0x62/jsbsim-wasm
-```
-
-Note that versioning of this package is tied to JSBSim version. For example, `@0x62/jsbsim-wasm@1.2.4` contains the built version of JSBSim `1.2.4`.
-
-## Prerequisites
-
-- Node.js 20+
-- CMake 3.20+
-- Emscripten SDK (`emcmake`/`em++` in `PATH`)
-
-## Build
-
-```bash
-npm install
-npm run prepare:jsbsim
-npm run generate:bindings
-npm run build:wasm
-npm run build:sdk
-```
-
-Or all at once:
-
-```bash
+npm ci
+# Clean SDK revision, verified pinned native archive:
 npm run build
+# Or explicit local development using the canonical native checkout:
+npm run build:local -- --jsbsim-source=../jsbsim
+npm run pack:build
 ```
 
-Note: `prepare:jsbsim` automatically applies `patches/jsbsim-emscripten-compat.patch` to keep JSBSim Emscripten-compatible (portable `strerror_r` handling and POSIX socket/select headers).
+The orchestrator captures stable source inputs, generates bindings, builds WASM and TypeScript, runs the SDK checks, and assembles an identified package under `build/artifacts/`. Failed builds do not replace accepted artifacts. Canonical `dist/` is not a build or packaging input. The legacy partial-build aliases invoke the same full pipeline.
 
-Artifacts:
-
-- WASM runtime: `dist/wasm/jsbsim_wasm.mjs`, `dist/wasm/jsbsim_wasm.wasm`
-- SDK package output: `dist/*`
+Normal builds do not fetch native source, alter Git branches or versions, apply vendor patches, publish, or push. See [the source and build contract](docs/centralized-builds.md) for capture boundaries, pinned/local modes, metadata, package integrity and rollback.
 
 ## SDK Usage
 
@@ -63,8 +45,8 @@ Artifacts:
 ### Basic lifecycle
 
 ```ts
-import { JSBSimSdk } from "@0x62/jsbsim-wasm";
-import { wasmBinaryUrl, wasmModuleUrl } from "@0x62/jsbsim-wasm/wasm";
+import { JSBSimSdk } from "@felipegalind0/jsbsim-wasm";
+import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim-wasm/wasm";
 
 const sdk = await JSBSimSdk.create({
   moduleUrl: wasmModuleUrl,
@@ -113,16 +95,16 @@ await sdk.syncToPersistence();
 Use the package `/wasm` export to reference the bundled runtime artifacts:
 
 ```ts
-import { wasmBinaryUrl, wasmModuleUrl } from "@0x62/jsbsim-wasm/wasm";
+import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim-wasm/wasm";
 ```
 
 Raw artifact subpaths are also exported:
 
-- `@0x62/jsbsim-wasm/wasm/module`
-- `@0x62/jsbsim-wasm/wasm/binary`
+- `@felipegalind0/jsbsim-wasm/wasm/module`
+- `@felipegalind0/jsbsim-wasm/wasm/binary`
 
 > [!WARNING]  
-> To use the binary/module URLs you must disable dependancy optimisation in your bundler. For example, in Vite, set `optimizeDeps.exclude: ["@0x62/jsbsim-wasm"]`. Alternatively, upload the WASM binary/module file to `public/` and pass the URL directly.
+> To use the binary/module URLs you must disable dependancy optimisation in your bundler. For example, in Vite, set `optimizeDeps.exclude: ["@felipegalind0/jsbsim-wasm"]`. Alternatively, upload the WASM binary/module file to `public/` and pass the URL directly.
 
 ### Enums and mode flags
 
@@ -131,7 +113,7 @@ import {
   JSBSimSdk,
   TrimMode,
   ResetToInitialConditionsMode
-} from "@0x62/jsbsim-wasm";
+} from "@felipegalind0/jsbsim-wasm";
 
 const sdk = await JSBSimSdk.create();
 
@@ -215,7 +197,7 @@ roll/side velocity, slip and steering angles, and the roll/side and body-axis
 reaction forces JSBSim applied.
 
 ```ts
-import { GEAR_CONTACT_FIELDS } from "@0x62/jsbsim-wasm";
+import { GEAR_CONTACT_FIELDS } from "@felipegalind0/jsbsim-wasm";
 
 const contacts = sdk.createGearContactReader();
 sdk.run();
@@ -231,60 +213,39 @@ detached automatically by `sdk.destroy()`.
 ## Testing
 
 ```bash
-npm run build:wasm
-npm run build:sdk
+npm run test:source
+# The full build runs typechecking and all tests before promotion.
+# These commands recheck the accepted artifact and its captured inputs:
 npm test
+npm run typecheck
 ```
 
-Tests use Node's built-in test runner and the C172 model from `vendor/jsbsim`.
+Real-WASM tests and benchmarks use the C172 model and runtime files from the same resolved native snapshot that was compiled. Checks reject changed SDK inputs, local native inputs or artifact bytes rather than silently testing an older build. Results establish software behavior; they do not establish aircraft calibration.
 
-## Updating JSBSim
+## Updating native source and packaging
 
-### Local
+Native updates are explicit: preserve and test the canonical native integration commit, create its Git archive under `sources/`, then update its lock:
 
 ```bash
-npm run update:jsbsim
+npm run update:jsbsim -- \
+  --origin=https://github.com/Felipegalind0/jsbsim \
+  --commit=FULL_NATIVE_COMMIT \
+  --archive=sources/jsbsim-FULL_NATIVE_COMMIT.tar.gz
 ```
 
-This will:
+The updater validates and hashes the archive and writes only the lock. It does not select latest upstream, modify a checkout, increment package versions or commit. Keep the reviewed source archive and lock together.
 
-1. Update submodule to `origin/master` (or a ref you pass).
-2. Regenerate bindings and TypeScript API.
-3. Rebuild WASM artifacts.
-4. Rebuild SDK output.
+`npm run pack:build` packs only a checked immutable artifact; `npm run release` additionally requires clean pinned inputs. These commands write a tarball and external integrity record under `build/packages/`; neither publishes nor performs Git operations. Direct canonical `npm pack` is blocked because canonical `dist/` may contain a historical build.
 
-### CI automation
+The former automatic updater workflow now verifies the committed lock and builds a checked package with read-only repository permissions. It does not create dependency PRs. Demo deployment is manual. Publication and upstream contributions require separate review and authorization.
 
-`.github/workflows/update-jsbsim.yml` runs weekly and on manual trigger, checks for a newer stable JSBSim tag, and opens/updates a PR only when a new version is available. The PR updates the submodule, regenerates artifacts, and bumps package version to the next `<jsbsim>-beta.<N>` release.
+## Build identity
 
-## Release Workflow
-
-Run a release preparation with:
-
-```bash
-./scripts/release.sh
+```ts
+import { buildIdentity } from "@felipegalind0/jsbsim-wasm";
 ```
 
-What it does by default:
-
-1. Resolves the target JSBSim tag (latest stable `vX.Y.Z` unless overridden).
-2. Checks out that JSBSim tag in the submodule, reapplies patches, and rebuilds SDK/WASM artifacts.
-3. Sets package version to `<jsbsim-version>-beta.<N>` (for example `1.2.4-beta.1`, auto-incremented from npm history).
-4. Creates a release commit and annotated git tag.
-5. Publishes to npm.
-6. Creates a GitHub release and uploads `release/dist-<version>.tar.gz` plus `release/publish-metadata.json`.
-7. Pushes commit + tag to origin.
-
-Useful flags:
-
-- `--jsbsim-tag <tag>`
-- `--beta <N>`
-- `--npm-tag <tag>`
-- `--skip-demo-check`
-- `--allow-dirty`
-- `--dry-run`
-
-Publish metadata includes package/tarball details, git commit/tag data, JSBSim submodule revision, and SHA-256 digests of packed files.
+The identity records native and SDK commits, content digests, dirty state, build mode, toolchain and options. The `@felipegalind0/jsbsim-wasm/build-metadata` JSON export adds every distributed file hash, source/dependency lock provenance, generated-binding identity and completed checks. Tarball integrity is recorded externally to avoid self-referential hashes.
 
 ## Demo SPA
 
@@ -299,7 +260,7 @@ From repo root:
 
 ```bash
 npm run demo:install
-npm run build:wasm
+npm run build
 npm run demo:sync-assets
 npm run demo:dev
 ```

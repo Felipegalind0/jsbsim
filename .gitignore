@@ -13,3 +13,10 @@ demo/public/wasm/*
 !demo/public/wasm/.gitkeep
 demo/vite.config.js
 demo/vite.config.d.ts
+
+# Complete identified demo SDK distribution; retained history is under build/.
+demo/public/sdk/
+demo/public/.sdk-sync-*/
+
+# Retired native checkout; builds resolve the canonical fork or pinned archive.
+/vendor/

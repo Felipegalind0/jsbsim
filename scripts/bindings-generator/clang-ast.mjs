@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { AST_TMP_PREFIX, JSBSIM_SRC_DIR } from "./paths.mjs";
+import { AST_TMP_PREFIX, JSBSIM_SRC_DIR, BINDGEN_COMPILER } from "./paths.mjs";
 
 function parseClangJsonOutput(output) {
   const trimmed = output.trim();
@@ -86,7 +86,7 @@ function parseClangJsonOutput(output) {
 }
 
 export function runClangAstDumpFromFile(sourcePath, { filter } = {}) {
-  const compilers = ["clang++", "clang"];
+  const compilers = [BINDGEN_COMPILER];
 
   for (const compiler of compilers) {
     const args = ["-std=c++17", "-I", JSBSIM_SRC_DIR, "-fsyntax-only"];

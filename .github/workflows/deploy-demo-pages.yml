@@ -2,9 +2,6 @@ name: Deploy Demo To GitHub Pages
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
 
 permissions:
   contents: read
@@ -23,18 +20,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 26.8.2
           cache: npm
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: 3.1.69
+          version: 6.0.9
+
+      - name: Install pinned packaging tools
+        run: |
+          npm install --global npm@11.19.1
+          python -m pip install cmake==4.4.3
 
       - name: Install root dependencies
         run: npm ci
@@ -43,7 +45,7 @@ jobs:
         run: npm --prefix demo ci
 
       - name: Build WASM artifacts
-        run: npm run build:wasm
+        run: npm run build
 
       - name: Sync demo public assets
         run: npm run demo:sync-assets

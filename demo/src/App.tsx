@@ -243,8 +243,8 @@ export default function App() {
 
       const nextManifest = (await manifestResponse.json()) as ScenarioManifest;
       const sdk = await JSBSimSdk.create({
-        moduleUrl: withBase("/wasm/jsbsim_wasm.mjs"),
-        wasmUrl: withBase("/wasm/jsbsim_wasm.wasm"),
+        moduleUrl: withBase("/sdk/wasm/jsbsim_wasm.mjs"),
+        wasmUrl: withBase("/sdk/wasm/jsbsim_wasm.wasm"),
       });
 
       sdk.configurePaths({

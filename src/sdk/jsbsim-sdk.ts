@@ -5,6 +5,7 @@ import { loadJSBSimModule } from "./load-module";
 import { GearContactReader } from "./gear-contacts";
 import { PropertyBatch, type PropertyBatchOptions } from "./property-batch";
 import { WasmVfsManager } from "./vfs";
+import { JSBSimModelLoadError } from "./model-load-error";
 
 export interface ConfigurePathsOptions {
   rootDir?: string;
@@ -32,6 +33,10 @@ export class JSBSimSdk extends JSBSimApi {
   readonly vfs: WasmVfsManager;
   private readonly logListeners: Record<JSBSimSdkLogEvent, Set<JSBSimSdkLogListener>>;
   private readonly gearReaders = new Set<GearContactReader>();
+  private readonly propertyBatches = new Set<PropertyBatch>();
+  private destroyed = false;
+  private modelLoadLog: JSBSimLogEntry[] | null = null;
+  private stopForwardingLogs: () => void = () => {};
 
   private constructor(module: JSBSimRuntimeModule, exec: FGFDMExecApi, vfs: WasmVfsManager) {
     super(exec);
@@ -82,19 +87,30 @@ export class JSBSimSdk extends JSBSimApi {
     const exec = new module.FGFDMExec();
     const sdk = new JSBSimSdk(module, exec, vfs);
     emitSdkLog = (entry) => sdk.emitLogEntry(entry);
-    for (const entry of bufferedLogEntries) {
-      emitSdkLog(entry);
+    sdk.stopForwardingLogs = () => {
+      emitSdkLog = () => {};
+      bufferedLogEntries = [];
+    };
+    try {
+      for (const entry of bufferedLogEntries) emitSdkLog(entry);
+      bufferedLogEntries = [];
+      sdk.configurePaths();
+      return sdk;
+    } catch (cause) {
+      try {
+        sdk.destroy();
+      } catch (cleanupError) {
+        throw new AggregateError([cause, cleanupError], "JSBSim SDK initialization and cleanup failed.");
+      }
+      throw cause;
     }
-    bufferedLogEntries = [];
-
-    sdk.configurePaths();
-    return sdk;
   }
 
   /**
    * Registers a handler for JSBSim log output events.
    */
   on(event: JSBSimSdkLogEvent, listener: JSBSimSdkLogListener): this {
+    this.requireAlive();
     this.logListeners[event].add(listener);
     return this;
   }
@@ -120,6 +136,11 @@ export class JSBSimSdk extends JSBSimApi {
   }
 
   private emitLogEntry(entry: JSBSimLogEntry): void {
+    if (this.destroyed) return;
+    if (this.modelLoadLog) {
+      this.modelLoadLog.push({ ...entry, message: entry.message.slice(-2048), raw: entry.raw.slice(-2048) });
+      if (this.modelLoadLog.length > 128) this.modelLoadLog.shift();
+    }
     this.emitLogEvent(entry.stream, entry);
     this.emitLogEvent("log", entry);
   }
@@ -134,6 +155,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Sets standard JSBSim runtime directories on `FGFDMExec`.
    */
   configurePaths(options: ConfigurePathsOptions = {}): void {
+    this.requireAlive();
     const rootDir = options.rootDir ?? this.vfs.runtimeRoot;
     const aircraftPath = options.aircraftPath ?? "aircraft";
     const enginePath = options.enginePath ?? "engine";
@@ -145,6 +167,29 @@ export class JSBSimSdk extends JSBSimApi {
     this.setEnginePath(enginePath);
     this.setSystemsPath(systemsPath);
     this.setOutputPath(outputPath);
+  }
+
+  /** Model-bound readers and property nodes cannot survive a model reload. */
+  override loadModel(model: string, addModelToPath?: boolean): boolean;
+  override loadModel(aircraftPath: string, enginePath: string, systemsPath: string, model: string, addModelToPath?: boolean): boolean;
+  override loadModel(first: string, second?: string | boolean, systemsPath?: string, model?: string, addModelToPath = true): boolean {
+    this.requireAlive();
+    this.disposeModelViews();
+    if (typeof second === "string") {
+      if (systemsPath === undefined || model === undefined) throw new TypeError("Model path overload requires all three paths and a model name.");
+      return this.exec.LoadModel(first, second, systemsPath, model, addModelToPath);
+    }
+    return this.exec.LoadModel(first, second ?? true);
+  }
+
+  override run(): boolean {
+    this.requireAlive();
+    return super.run();
+  }
+
+  override runIc(): boolean {
+    this.requireAlive();
+    return super.runIc();
   }
 
   /**
@@ -167,8 +212,45 @@ export class JSBSimSdk extends JSBSimApi {
   }
 
   /**
+   * Loads a model or throws an error containing paths, bounded native logs,
+   * and the original thrown value (including numeric Wasm exceptions).
+   * The existing boolean-returning load APIs retain their behavior.
+   */
+  loadModelOrThrow(model: string, options: LoadModelOptions = {}): true {
+    this.requireAlive();
+    if (this.modelLoadLog) throw new Error("A diagnostic model load is already in progress.");
+    const paths = {
+      rootDir: this.getRootDir(),
+      aircraftPath: options.aircraftPath ?? this.getAircraftPath(),
+      enginePath: options.enginePath ?? this.getEnginePath(),
+      systemsPath: options.systemsPath ?? this.getSystemsPath(),
+      addModelToPath: options.addModelToPath ?? true,
+    };
+    const logs: JSBSimLogEntry[] = [];
+    this.modelLoadLog = logs;
+    try {
+      let loaded: boolean;
+      try {
+        loaded = this.loadModelWithOptions(model, options);
+      } catch (cause) {
+        throw new JSBSimModelLoadError(model, paths, logs, "exception", cause);
+      }
+      if (!loaded) throw new JSBSimModelLoadError(model, paths, logs, "returned-false");
+      return true;
+    } finally {
+      this.modelLoadLog = null;
+    }
+  }
+
+  /**
    * Loads a script with JSBSim defaults for optional arguments.
    */
+  override loadScript(path: string, deltaT = 0, initFile = ""): boolean {
+    this.requireAlive();
+    this.disposeModelViews();
+    return super.loadScript(path, deltaT, initFile);
+  }
+
   loadScriptWithDefaults(path: string, deltaT = 0, initFile = ""): boolean {
     return this.loadScript(path, deltaT, initFile);
   }
@@ -179,10 +261,14 @@ export class JSBSimSdk extends JSBSimApi {
    * Prefer this over many `getPropertyValue()` calls per simulation step.
    */
   createPropertyBatch(paths: readonly string[], options: PropertyBatchOptions = {}): PropertyBatch {
+    this.requireAlive();
     if (!this.module.PropertyBatch) {
       throw new Error("This JSBSim wasm build does not include PropertyBatch bindings.");
     }
-    return new PropertyBatch(new this.module.PropertyBatch(this.exec), paths, options);
+    const batch = new PropertyBatch(new this.module.PropertyBatch(this.exec), paths, options,
+      () => this.propertyBatches.delete(batch));
+    this.propertyBatches.add(batch);
+    return batch;
   }
 
   /**
@@ -191,6 +277,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Readers are detached automatically by `destroy()`.
    */
   createGearContactReader(): GearContactReader {
+    this.requireAlive();
     if (!this.module.GearContacts) {
       throw new Error("This JSBSim wasm build does not include GearContacts bindings.");
     }
@@ -242,15 +329,47 @@ export class JSBSimSdk extends JSBSimApi {
     await this.vfs.enablePersistence();
   }
 
-  /**
-   * Destroys the underlying wasm-bound exec instance.
-   */
+  get isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
+  private requireAlive(): void {
+    if (this.destroyed) throw new Error("JSBSimSdk has been destroyed.");
+  }
+
+  private disposeModelViews(): void {
+    const errors: unknown[] = [];
+    for (const batch of [...this.propertyBatches]) {
+      try { batch.dispose(); } catch (error) { errors.push(error); }
+    }
+    for (const reader of [...this.gearReaders]) {
+      try { reader.detach(); } catch (error) { errors.push(error); }
+    }
+    this.propertyBatches.clear();
+    this.gearReaders.clear();
+    if (errors.length) throw new AggregateError(errors, "Failed to dispose JSBSim model views.");
+  }
+
+  /** Frees SDK-owned native objects once, even after partial initialization. */
   destroy(): void {
-    // Readers hold a raw FGFDMExec pointer; detach them before it is freed.
-    for (const reader of [...this.gearReaders]) reader.detach();
-    this.module.destroy?.(this.exec);
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.stopForwardingLogs();
     this.logListeners.stdout.clear();
     this.logListeners.stderr.clear();
     this.logListeners.log.clear();
+    this.modelLoadLog = null;
+    const errors: unknown[] = [];
+    try { this.disposeModelViews(); } catch (error) { errors.push(error); }
+    try {
+      // Embind lifetime methods are not part of the generated C++ API.
+      const native = this.exec as FGFDMExecApi & { delete?: () => void; isDeleted?: () => boolean };
+      if (!native.isDeleted?.()) {
+        if (typeof native.delete === "function") native.delete();
+        else if (this.module.destroy) this.module.destroy(this.exec);
+        else throw new Error("The JSBSim runtime exposes no native executive destructor.");
+      }
+    } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, "Failed to destroy JSBSim SDK.");
   }
 }

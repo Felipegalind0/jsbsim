@@ -32,18 +32,25 @@ export class PropertyBatch {
   /** Paths that did not exist when the batch was created; they read as `NaN`. */
   readonly missing: readonly string[];
   private native: NativePropertyBatch | null;
+  private readonly onDispose: () => void;
 
   /** @internal Use `JSBSimSdk.createPropertyBatch()`. */
-  constructor(native: NativePropertyBatch, paths: readonly string[], options: PropertyBatchOptions = {}) {
+  constructor(native: NativePropertyBatch, paths: readonly string[], options: PropertyBatchOptions = {}, onDispose: () => void = () => {}) {
     const create = options.create ?? false;
     const missing: string[] = [];
-    for (const path of paths) {
-      const index = native.add(path, create);
-      if (!native.has(index)) {
-        missing.push(path);
+    try {
+      for (const path of paths) {
+        const index = native.add(path, create);
+        if (!native.has(index)) missing.push(path);
       }
+    } catch (cause) {
+      try { native.delete(); } catch (cleanupError) {
+        throw new AggregateError([cause, cleanupError], "Property batch initialization and cleanup failed.");
+      }
+      throw cause;
     }
     this.native = native;
+    this.onDispose = onDispose;
     this.paths = Object.freeze([...paths]);
     this.missing = Object.freeze(missing);
   }
@@ -97,8 +104,10 @@ export class PropertyBatch {
 
   /** Frees the native batch. Further use throws. */
   dispose(): void {
-    this.native?.delete();
+    const native = this.native;
+    if (!native) return;
     this.native = null;
+    try { native.delete(); } finally { this.onDispose(); }
   }
 
   private requireNative(): NativePropertyBatch {

@@ -53,9 +53,16 @@ export class GearContactReader {
 
   /** @internal Use `JSBSimSdk.createGearContactReader()`. */
   constructor(native: NativeGearContacts, onDispose: () => void) {
-    if (native.fields() !== GEAR_CONTACT_FIELDS.length) {
-      native.delete();
-      throw new Error(`GearContacts field count mismatch: wasm has ${native.fields()}, SDK expects ${GEAR_CONTACT_FIELDS.length}.`);
+    try {
+      const fields = native.fields();
+      if (fields !== GEAR_CONTACT_FIELDS.length) {
+        throw new Error(`GearContacts field count mismatch: wasm has ${fields}, SDK expects ${GEAR_CONTACT_FIELDS.length}.`);
+      }
+    } catch (cause) {
+      try { native.delete(); } catch (cleanupError) {
+        throw new AggregateError([cause, cleanupError], "Gear reader initialization and cleanup failed.");
+      }
+      throw cause;
     }
     this.native = native;
     this.onDispose = onDispose;
@@ -100,15 +107,14 @@ export class GearContactReader {
     if (!this.native) {
       return;
     }
-    this.native.delete();
+    const native = this.native;
     this.native = null;
-    this.onDispose();
+    try { native.delete(); } finally { this.onDispose(); }
   }
 
   /** @internal Called by `JSBSimSdk.destroy()` before the exec is freed. */
   detach(): void {
-    this.native?.detach();
-    this.dispose();
+    try { this.native?.detach(); } finally { this.dispose(); }
   }
 
   private requireNative(): NativeGearContacts {

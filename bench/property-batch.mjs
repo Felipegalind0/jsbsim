@@ -18,7 +18,7 @@ const copyTree = (sdk, from, to) => {
 };
 
 const sdk = await JSBSimSdk.create({ moduleUrl: wasmModuleUrl, wasmUrl: wasmBinaryUrl, log: { console: false } });
-for (const dir of ["aircraft/c172p", "engine", "systems"]) copyTree(sdk, path.join(root, "vendor/jsbsim", dir), dir);
+for (const dir of ["aircraft/c172p", "engine", "systems"]) copyTree(sdk, path.join(process.env.JSBSIM_SOURCE_ROOT ?? (() => { throw new Error("Resolved JSBSIM_SOURCE_ROOT is required"); })(), dir), dir);
 sdk.loadModel("c172p");
 sdk.setPropertyValue("ic/h-agl-ft", 3);
 sdk.setPropertyValue("ic/vc-kts", 50);

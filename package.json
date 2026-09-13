@@ -1,6 +1,6 @@
 {
-  "name": "@0x62/jsbsim-wasm",
-  "version": "1.2.4-beta.4",
+  "name": "@felipegalind0/jsbsim-wasm",
+  "version": "1.2.4-fork.1",
   "description": "Tooling and TypeScript SDK for JSBSim compiled to WebAssembly",
   "license": "MIT",
   "type": "module",
@@ -28,29 +28,35 @@
     },
     "./wasm/binary": {
       "default": "./dist/wasm/jsbsim_wasm.wasm"
-    }
+    },
+    "./build-metadata": "./dist/build-metadata.json"
   },
   "scripts": {
-    "prepare:jsbsim": "./scripts/prepare-jsbsim.sh",
-    "generate:bindings": "node ./scripts/generate-fgfdmexec-bindings.mjs",
-    "build:wasm": "./scripts/build-wasm.sh",
-    "build:sdk": "tsup --config tsup.config.ts",
-    "test": "node --test test/",
-    "bench:property-batch": "node bench/property-batch.mjs",
-    "build": "npm run generate:bindings && npm run build:wasm && npm run build:sdk",
-    "typecheck": "tsc --noEmit",
-    "update:jsbsim": "./scripts/update-jsbsim.sh",
-    "release:metadata": "node ./scripts/write-publish-metadata.mjs --version $(node -p \"require('./package.json').version\")",
-    "release": "./scripts/release.sh",
+    "prepare:jsbsim": "node scripts/resolve-jsbsim-source.mjs",
+    "generate:bindings": "node scripts/build.mjs",
+    "build:wasm": "node scripts/build.mjs",
+    "build:sdk": "node scripts/build.mjs",
+    "test": "node scripts/run-built-check.mjs test",
+    "bench:property-batch": "node scripts/run-built-check.mjs bench",
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/run-built-check.mjs typecheck",
+    "update:jsbsim": "node scripts/update-source-lock.mjs",
+    "release:metadata": "node scripts/write-publish-metadata.mjs",
+    "release": "node scripts/pack-build.mjs --release",
     "demo:install": "npm --prefix demo install",
-    "demo:sync-wasm": "./scripts/sync-demo-wasm.sh",
+    "demo:sync-wasm": "node scripts/sync-demo-wasm.mjs",
     "demo:sync-scenario": "node ./scripts/sync-demo-scenario.mjs",
     "demo:sync-assets": "npm run demo:sync-wasm && npm run demo:sync-scenario",
-    "demo:prepare": "npm run build:wasm && npm run demo:sync-assets",
+    "demo:prepare": "node scripts/sync-demo-wasm.mjs && npm run demo:sync-scenario",
     "demo:dev": "npm --prefix demo run dev",
     "demo:build": "npm --prefix demo run build",
     "demo:preview": "npm --prefix demo run preview",
-    "clean": "rm -rf build dist generated/FGFDMExecBindings.cpp src/generated/fgfdmexec-api.ts src/generated/jsbsim-api.ts"
+    "clean": "node -e \"console.error('Build inputs and accepted artifacts are retained; remove only a reviewed failed attempt explicitly.'); process.exitCode=1\"",
+    "build:metadata": "node scripts/write-build-metadata.mjs",
+    "build:local": "node scripts/build.mjs --mode=local",
+    "test:source": "node --test test/source-contract.test.mjs",
+    "pack:build": "node scripts/pack-build.mjs",
+    "prepack": "node -e \"throw new Error('Use npm run pack:build for an identified, checked immutable candidate.')\""
   },
   "engines": {
     "node": ">=20"
@@ -59,5 +65,9 @@
     "@types/node": "^24.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Felipegalind0/jsbsim-wasm.git"
   }
 }

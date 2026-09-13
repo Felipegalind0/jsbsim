@@ -8,7 +8,8 @@ import { GEAR_CONTACT_FIELDS, JSBSimSdk, PropertyBatch } from "../dist/index.js"
 import { wasmBinaryUrl, wasmModuleUrl } from "../dist/wasm.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const jsbsimRoot = path.join(root, "vendor/jsbsim");
+const jsbsimRoot = process.env.JSBSIM_SOURCE_ROOT;
+if (!jsbsimRoot) throw new Error("Resolved JSBSIM_SOURCE_ROOT is required; use npm run build/test.");
 
 function copyTree(sdk, from, to) {
   for (const entry of readdirSync(from)) {
