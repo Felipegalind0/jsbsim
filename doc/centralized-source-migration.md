@@ -128,3 +128,67 @@ the consolidation commit. The artifact hashes above identify that actual run;
 a subsequent SDK/release build must pin the resulting native commit and its own
 produced artifacts. No native version-string refactor is required for this
 migration.
+
+
+## Model replacement lifetime correction — 2026-09-13
+
+The first coherent SDK build exposed a native model replacement defect at
+`aeb43b705596883c8cbeb6cac80464af7cc1d76b`. A standalone native executive
+loading `c172p`, then a missing aircraft, and then being destroyed reproduced
+the failure without WASM, cached property batches, gear readers, or `RunIC`.
+Repeated successful loads and loaded/missing/reload sequences also crashed.
+The initial single successful load and initial missing-file controls did not.
+
+AddressSanitizer identified a heap-use-after-free in
+`FGLocation::GetSeaLevelRadius()`: executive destruction called
+`FGPropertyManager::Unbind()`, which untied a property by reading its last
+value from an already destroyed inertial model. The earlier `DeAllocate()`
+had cleared the models without releasing their property bindings. Replacement
+also produced hundreds of failed-property-tie warnings before the crash.
+
+`DeAllocate()` now unbinds properties while all model and initial-condition
+objects are still alive. The existing executive-owned binding block is a
+shared `Bind()` helper, preserving its `Constructing` guard and restoring
+executive properties after replacement allocation. A separate load-attempt
+flag ensures that the next load starts with fresh models after a partially
+processed XML failure as well as after a successful load. A failed load still
+returns false. Clearing the catalog vector prevents duplicate catalog entries
+from accumulating across repeated successful loads.
+
+`TestModelReload.py` exercises six cases: repeated success, failure followed by
+destruction, success/failure/recovery, two missing files followed by recovery,
+initial failure followed by destruction, and repeated partial XML failures
+followed by recovery. It explicitly triggers executive destruction. Successful
+replacement cases also exercise live model state and executive `dt`, random
+seed, reset, pause, clock, and termination properties; a successful load return
+alone is insufficient.
+
+The same durable native environment and build described above were used.
+After the correction, this focused command passed **11/11 CTest targets** in
+38.23 seconds, including the six new reload cases and all eight earlier
+preservation targets:
+
+```sh
+cmake --build build/native --target _jsbsim FGLogTest1 --parallel 6
+ctest --test-dir build/native --output-on-failure \
+  -R '^(TestModelReload|TestModelLoading|CheckSimTimeReset|TestTurbineTrimSpool|TestTurbine|TestEngineIndexedProps|CheckTrim|TestWheelSpin|TestGndReactions|TestHoldDown|FGLogTest1)$'
+```
+
+The native extension used for this run has SHA-256
+`e5499254f1d127c4db5bc4c3ea2df7976dbf6053cf3effab69fe03c2505e4070`.
+The preceding artifact hashes document the earlier preservation run and do not
+identify this corrected binary.
+
+A separate ignored build at `build/reload-asan` used AppleClang with
+`-fsanitize=address -fno-omit-frame-pointer`, Debug configuration, and the
+standalone native reproducer linked against its `libJSBSim.a`. After rebuilding
+with the correction, all six original sequence controls/reproductions exited
+successfully with no sanitizer errors or failed-property-tie warnings. The
+standalone executable SHA-256 was
+`2e5b32a28ed591aa122bf3534e74bba90e4143b142bb70594012a6ee13c54abf`.
+Local diagnostic scripts, sequence logs, pre-fix sanitizer stack, and the
+post-fix summary are retained in
+`build/native/model-reload-diagnostic/`; the tracked regression and this source
+change are the durable reproduction contract. SDK rebuilding and WASM
+verification must use a newly pinned native commit containing this fix before
+claiming that the WASM failure is resolved.
