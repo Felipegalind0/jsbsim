@@ -332,6 +332,28 @@ void testMinLevel() {
   TS_ASSERT_EQUALS(buffer.str(), "INFO");
 }
 
+// Native sinks retain their ANSI defaults; Emscripten sinks receive text.
+void assertDefaultFormat(const std::string& actual, const std::string& ansi) {
+#ifdef __EMSCRIPTEN__
+  TS_ASSERT_EQUALS(actual, "Hello, World!");
+#else
+  TS_ASSERT_EQUALS(actual, ansi);
+#endif
+}
+
+void testDisabledFormattingPreservesMessage() {
+  logger->DisableHighLighting();
+  std::ostringstream buffer;
+  auto cout_buffer = std::cout.rdbuf(buffer.rdbuf());
+  {
+    JSBSim::FGLogging log(JSBSim::LogLevel::INFO);
+    log << JSBSim::LogFormat::RED << JSBSim::LogFormat::BOLD;
+    log << "Hello, World!" << JSBSim::LogFormat::RESET;
+  }
+  std::cout.rdbuf(cout_buffer);
+  TS_ASSERT_EQUALS(buffer.str(), "Hello, World!");
+}
+
 void testRedFormat() {
   std::ostringstream buffer;
   auto cout_buffer = std::cout.rdbuf();
@@ -343,7 +365,7 @@ void testRedFormat() {
     log << JSBSim::LogFormat::RESET;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[31mHello, World!\033[0m");
+  assertDefaultFormat(buffer.str(), "\033[31mHello, World!\033[0m");
 }
 
 void testCyanFormat() {
@@ -357,7 +379,7 @@ void testCyanFormat() {
     log << JSBSim::LogFormat::RESET;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[34mHello, World!\033[0m");
+  assertDefaultFormat(buffer.str(), "\033[34mHello, World!\033[0m");
 }
 
 void testBoldFormat() {
@@ -371,7 +393,7 @@ void testBoldFormat() {
     log << JSBSim::LogFormat::RESET;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[1mHello, World!\033[0m");
+  assertDefaultFormat(buffer.str(), "\033[1mHello, World!\033[0m");
 }
 
 void testNormalFormat() {
@@ -385,7 +407,7 @@ void testNormalFormat() {
     log << JSBSim::LogFormat::RESET;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[22mHello, World!\033[0m");
+  assertDefaultFormat(buffer.str(), "\033[22mHello, World!\033[0m");
 }
 
 void testUnderlineFormat() {
@@ -399,7 +421,7 @@ void testUnderlineFormat() {
     log << JSBSim::LogFormat::UNDERLINE_OFF;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[4mHello, World!\033[24m");
+  assertDefaultFormat(buffer.str(), "\033[4mHello, World!\033[24m");
 }
 
 void testDefaultFormat() {
@@ -413,7 +435,7 @@ void testDefaultFormat() {
     log << JSBSim::LogFormat::RESET;
   }
   std::cout.rdbuf(cout_buffer);
-  TS_ASSERT_EQUALS(buffer.str(), "\033[39mHello, World!\033[0m");
+  assertDefaultFormat(buffer.str(), "\033[39mHello, World!\033[0m");
 }
 };
 
