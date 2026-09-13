@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "node": "v26.8.2",
+  "npm": "11.19.1",
+  "emscripten": {
+    "version": "6.0.9",
+    "profiles": [
+      {
+        "id": "homebrew-6.0.9",
+        "platforms": [
+          "darwin",
+          "linux"
+        ],
+        "banner": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.9-git",
+        "evidence": {
+          "sourceTag": "https://github.com/emscripten-core/emscripten/tree/6.0.9",
+          "sourceArchiveSha256": "f15e20d2b485f047fee35e5801cbf85be1edd696602c919d60f122f9d18d4529",
+          "installedFormulaSha256": "db7aeb855778dd7d7e0815168e2eb34960275e06cc3c72465944ad0aa15104b3"
+        }
+      },
+      {
+        "id": "emsdk-6.0.9",
+        "platforms": [
+          "linux",
+          "darwin",
+          "win32"
+        ],
+        "banner": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.9",
+        "evidence": {
+          "releaseRevision": "f04ea239d533260dd1db760dd2d668d5f9a88d6b",
+          "versionRewriteSource": "https://chromium.googlesource.com/emscripten-releases/+/f04ea239d533260dd1db760dd2d668d5f9a88d6b/src/build.py",
+          "versionRewriteSourceSha256": "40072503d8f891874ea3b048f3375f824ba376ab0915f3e50004ea88b0ba8f78"
+        }
+      }
+    ]
+  },
+  "cmake": "cmake version 4.4.3"
+}

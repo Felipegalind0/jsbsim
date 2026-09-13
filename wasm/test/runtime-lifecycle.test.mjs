@@ -1,0 +1,134 @@
+// Run by the build orchestrator against the frozen native fixtures and this attempt's dist.
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { describe, it } from "node:test";
+import { JSBSimModelLoadError, JSBSimSdk } from "../dist/index.js";
+import { wasmBinaryUrl, wasmModuleUrl } from "../dist/wasm.js";
+
+const nativeRoot = process.env.JSBSIM_SOURCE_ROOT;
+assert.ok(nativeRoot, "Set JSBSIM_SOURCE_ROOT from the verified build descriptor; no vendor fallback is permitted.");
+
+function copyXml(sdk, from, to) {
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const input = path.join(from, entry.name);
+    const output = `${to}/${entry.name}`;
+    if (entry.isDirectory()) copyXml(sdk, input, output);
+    else if (entry.name.endsWith(".xml")) sdk.writeDataFile(output, readFileSync(input));
+  }
+}
+
+async function createC172(log = { console: false }) {
+  const sdk = await JSBSimSdk.create({ moduleUrl: wasmModuleUrl, wasmUrl: wasmBinaryUrl, log });
+  try {
+    copyXml(sdk, path.join(nativeRoot, "aircraft/c172p"), "aircraft/c172p");
+    copyXml(sdk, path.join(nativeRoot, "engine"), "engine");
+    copyXml(sdk, path.join(nativeRoot, "systems"), "systems");
+    assert.equal(sdk.loadModel("c172p"), true);
+    sdk.setPropertyValue("ic/h-sl-ft", 3000);
+    sdk.setPropertyValue("ic/vc-kts", 90);
+    assert.equal(sdk.runIc(), true);
+    return sdk;
+  } catch (cause) {
+    sdk.destroy();
+    throw cause;
+  }
+}
+
+function assertDisposed(sdk, batch, reader) {
+  assert.equal(sdk.exec.isDeleted(), true, "SDK must release its real Embind executive");
+  assert.throws(() => batch.read(), /disposed/);
+  assert.throws(() => reader.read(), /disposed/);
+  assert.throws(() => sdk.run(), /destroyed/);
+}
+
+describe("real WASM lifetime and diagnostics", () => {
+  it("deletes the owned executive once after its children, across repeated lifecycles", async () => {
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const sdk = await createC172();
+      const batch = sdk.createPropertyBatch(["velocities/u-fps"]);
+      const reader = sdk.createGearContactReader();
+      assert.ok(Number.isFinite(batch.read()[0]));
+      assert.ok(reader.read().length > 0);
+      const originalDelete = sdk.exec.delete.bind(sdk.exec);
+      let deletes = 0;
+      sdk.exec.delete = () => { deletes++; originalDelete(); };
+      sdk.destroy();
+      sdk.destroy();
+      assert.equal(deletes, 1);
+      assertDisposed(sdk, batch, reader);
+    }
+  });
+
+  it("invalidates native views on successful and failed model replacements", async () => {
+    const sdk = await createC172();
+    try {
+      for (const model of ["c172p", "missing-aircraft"]) {
+        const batch = sdk.createPropertyBatch(["velocities/u-fps"]);
+        const reader = sdk.createGearContactReader();
+        assert.equal(sdk.loadModel(model), model === "c172p");
+        assert.throws(() => batch.read(), /disposed/);
+        assert.throws(() => reader.read(), /disposed/);
+      }
+      assert.equal(sdk.loadModel("c172p"), true);
+      assert.equal(sdk.runIc(), true);
+      assert.equal(sdk.run(), true);
+    } finally { sdk.destroy(); }
+    assert.equal(sdk.exec.isDeleted(), true);
+  });
+
+  it("invalidates views through the public script-loading entry point", async () => {
+    const sdk = await createC172();
+    try {
+      const batch = sdk.createPropertyBatch(["velocities/u-fps"]);
+      const reader = sdk.createGearContactReader();
+      assert.equal(sdk.loadScript("/runtime/missing-script.xml"), false);
+      assert.throws(() => batch.read(), /disposed/);
+      assert.throws(() => reader.read(), /disposed/);
+    } finally { sdk.destroy(); }
+  });
+
+  it("frees a real executive when initialization fails after allocation", async () => {
+    const factory = (await import(wasmModuleUrl)).default;
+    const failure = new Error("injected path configuration failure");
+    let allocated;
+    await assert.rejects(JSBSimSdk.create({
+      wasmUrl: wasmBinaryUrl,
+      log: { console: false },
+      moduleFactory: async options => {
+        const module = await factory(options);
+        const Executive = module.FGFDMExec;
+        return {
+          ...module,
+          FGFDMExec: function () {
+            allocated = new Executive();
+            allocated.SetRootDir = () => { throw failure; };
+            return allocated;
+          },
+        };
+      },
+    }), error => error === failure);
+    assert.ok(allocated);
+    assert.equal(allocated.isDeleted(), true);
+  });
+
+  it("reports attempt-specific native errors and preserves plain WASM logs", async () => {
+    const logs = [];
+    const sdk = await createC172({ console: false, stripAnsi: false, onLog: entry => logs.push(entry) });
+    try {
+      for (const model of ["first-missing-aircraft", "second-missing-aircraft"]) {
+        assert.throws(() => sdk.loadModelOrThrow(model), error => {
+          assert.ok(error instanceof JSBSimModelLoadError);
+          assert.equal(error.model, model);
+          assert.ok(error.logs.length > 0);
+          assert.ok(error.logs.every(entry => entry.raw.length <= 2048));
+          if (model.startsWith("second")) assert.ok(!error.logs.some(entry => entry.raw.includes("first-missing-aircraft")));
+          return true;
+        });
+      }
+      assert.equal(sdk.loadModelOrThrow("c172p"), true);
+      assert.ok(logs.length > 0, "exercise native logging rather than an empty trace");
+      assert.ok(logs.every(entry => !entry.raw.includes("\u001b[")), "native WASM logger emits plain text without SDK ANSI stripping");
+    } finally { sdk.destroy(); }
+  });
+});
