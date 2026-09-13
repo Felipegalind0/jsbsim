@@ -3,8 +3,7 @@ import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildInputSha256, captureSource, contentManifest, copyManifest, generatedBuildIdentity, manifestSha256, resolveNativeSource,
-  SDK_INPUT_ROOTS, sdkCaptureOptions, sha256, verifyContent, verifyGeneratedBindings, verifyResolvedSourceLock, verifyWorkspaceInputs, writeJson } from "./build-system/source.mjs";
+import { buildInputSha256, captureRepository, contentManifest, copyManifest, generatedBuildIdentity, sha256, verifyContent, verifyGeneratedBindings, verifyWorkspaceInputs, writeJson } from "./build-system/source.mjs";
 
 import { checkToolchain, rejectAmbientCompilerOverrides } from "./build-system/toolchain.mjs";
 
@@ -12,19 +11,15 @@ const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 function argumentsFor(argv) {
   rejectAmbientCompilerOverrides(process.env);
-  const options = { mode: "pinned", localSource: null, allowNetwork: false, prepareOnly: false };
+  const options = { allowDirty: false, allowNetwork: false, prepareOnly: false };
   for (const arg of argv) {
-    if (arg.startsWith("--mode=")) options.mode = arg.slice(7);
-    else if (arg.startsWith("--jsbsim-source=")) options.localSource = arg.slice(16);
+    if (arg === "--allow-dirty") options.allowDirty = true;
     else if (arg === "--allow-network") options.allowNetwork = true;
     else if (arg === "--prepare-only") options.prepareOnly = true;
     else throw new Error("Unknown build option: " + arg);
   }
   if (process.env.JSBSIM_SOURCE_DIR || process.env.JSBSIM_SOURCE_ROOT || process.env.JSBSIM_BUILD_DESCRIPTOR) {
     throw new Error("Use explicit build CLI source selection; legacy source/descriptor environment overrides cannot choose top-level build inputs.");
-  }
-  if (!["pinned", "local"].includes(options.mode) || (options.mode === "local") !== Boolean(options.localSource)) {
-    throw new Error("Use npm run build for the locked archive, or npm run build:local -- --jsbsim-source=../jsbsim.");
   }
   return options;
 }
@@ -55,10 +50,7 @@ function publicNative(source) {
 }
 async function createDescriptor(options) {
   const cache = path.join(sdkRoot, "build", "sources");
-  const native = await resolveNativeSource(sdkRoot, { mode: options.mode, localSource: options.localSource, cacheRoot: cache });
-  const sdk = await captureSource(sdkRoot, path.join(cache, "sdk"), sdkCaptureOptions);
-  if (options.mode === "pinned" && sdk.dirty) throw new Error("Pinned builds require a clean SDK revision. Use explicit build:local for preserved development inputs.");
-  verifyResolvedSourceLock(native, JSON.parse(await readFile(path.join(sdk.root, "jsbsim-source.lock.json"), "utf8")));
+  const { native, sdk } = await captureRepository(sdkRoot, { allowDirty: options.allowDirty, cacheRoot: cache });
   const packageJson = JSON.parse(await readFile(path.join(sdk.root, "package.json"), "utf8"));
   const lock = JSON.parse(await readFile(path.join(sdk.root, "package-lock.json"), "utf8"));
   if (lock.name !== packageJson.name || lock.version !== packageJson.version ||
@@ -68,11 +60,11 @@ async function createDescriptor(options) {
   const measuredToolchain = await toolchain();
   const tools = measuredToolchain.identity;
   checkToolchain(tools, JSON.parse(await readFile(path.join(sdk.root, "build-toolchain.lock.json"), "utf8")));
-  const recipe = { package: { name: packageJson.name, version: packageJson.version }, native: publicNative(native),
-    sdk: { commit: sdk.commit, contentSha256: sdk.contentSha256, dirty: sdk.dirty },
-    mode: options.mode, toolchain: tools, options: { buildType: "Release", cxxStandard: 17, sdkTarget: "es2022" } };
+  const recipe = { schemaVersion: 2, package: { name: packageJson.name, version: packageJson.version }, native: publicNative(native),
+    sdk: { commit: sdk.commit, contentSha256: sdk.contentSha256, dirty: sdk.dirty, path: "wasm" },
+    mode: "in-tree", toolchain: tools, options: { buildType: "Release", cxxStandard: 17, sdkTarget: "es2022" } };
   const inputSha256 = buildInputSha256({ ...recipe, build: { mode: recipe.mode, toolchain: recipe.toolchain, options: recipe.options } });
-  const identity = { schemaVersion: 1, package: recipe.package, native: recipe.native, sdk: recipe.sdk,
+  const identity = { schemaVersion: 2, package: recipe.package, native: recipe.native, sdk: recipe.sdk,
     build: { mode: recipe.mode, inputSha256, toolchain: recipe.toolchain, options: recipe.options } };
   await mkdir(path.join(sdkRoot, "build", "attempts"), { recursive: true });
   const attemptRoot = await mkdtemp(path.join(sdkRoot, "build", "attempts", inputSha256.slice(0, 12) + "-"));
@@ -80,7 +72,7 @@ async function createDescriptor(options) {
   const toolchainConfiguration = { path: measuredToolchain.configuration.path, sha256: measuredToolchain.configuration.sha256 };
   const workspaceRoot = path.join(attemptRoot, "sdk");
   await copyManifest(sdk.root, workspaceRoot, sdk.manifest);
-  const descriptor = { schemaVersion: 1, identity, native, sdk, attemptRoot, workspaceRoot, toolchainConfiguration,
+  const descriptor = { schemaVersion: 2, identity, native, sdk, attemptRoot, workspaceRoot, toolchainConfiguration,
     wasmBuildRoot: path.join(attemptRoot, "wasm"), distRoot: path.join(workspaceRoot, "dist") };
   await writeJson(path.join(attemptRoot, "descriptor.json"), descriptor);
   return descriptor;
@@ -107,6 +99,11 @@ async function bundleNativeNotices(descriptor) {
     await mkdir(path.dirname(destination), { recursive: true });
     await copyFile(path.join(descriptor.native.root, file.path), destination);
   }
+  for (const file of ["src/GeographicLib/LICENSE.txt", "src/simgear/xml/COPYING"]) {
+    const destination = path.join(descriptor.distRoot, "licenses", "jsbsim", file);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(path.join(descriptor.native.root, file), destination);
+  }
   await mkdir(path.join(descriptor.distRoot, "licenses"), { recursive: true });
   await copyFile(path.join(descriptor.workspaceRoot, "LICENSE"), path.join(descriptor.distRoot, "licenses", "sdk-LICENSE"));
   await writeFile(path.join(descriptor.distRoot, "licenses", "README.txt"),
@@ -121,13 +118,13 @@ async function finalize(descriptor, commands) {
   const files = Object.fromEntries((await contentManifest(descriptor.distRoot)).map(file => [file.path, file.sha256]));
   const bindings = JSON.parse(await readFile(path.join(descriptor.workspaceRoot, "generated/bindings-manifest.json"), "utf8"));
   const inputHash = name => descriptor.sdk.manifest.find(file => file.path === name)?.sha256;
-  const sourceLock = JSON.parse(await readFile(path.join(descriptor.sdk.root, "jsbsim-source.lock.json"), "utf8"));
   const packageFiles = Object.fromEntries(await Promise.all(["package.json", "LICENSE", "README.md"].map(async name =>
     [name, sha256(await readFile(path.join(descriptor.workspaceRoot, name)))])));
   const metadata = { schemaVersion: 1, identity: descriptor.identity, files, packageFiles,
     provenance: {
-      nativeArchive: descriptor.native.archiveSha256 ? { path: sourceLock.archive.path, sha256: descriptor.native.archiveSha256 } : null,
-      nativeSourceLockSha256: inputHash("jsbsim-source.lock.json"),
+      repository: { commit: descriptor.native.commit, contentSha256: descriptor.native.contentSha256, sdkPath: "wasm" },
+      nativeArchive: null,
+      nativeSourceLockSha256: null,
       sdkDependencyLockSha256: inputHash("package-lock.json"),
       toolchainLockSha256: inputHash("build-toolchain.lock.json"),
       generatedBindings: bindings,

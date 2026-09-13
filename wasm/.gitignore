@@ -20,3 +20,11 @@ demo/public/.sdk-sync-*/
 
 # Retired native checkout; builds resolve the canonical fork or pinned archive.
 /vendor/
+
+# Override the enclosing native repository's broad build* ignore for authored SDK files.
+!build-toolchain.lock.json
+!src/build-identity.ts
+!scripts/build-system/
+!scripts/build-system/**
+!scripts/build*.mjs
+!scripts/build-wasm.sh

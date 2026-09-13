@@ -1,6 +1,6 @@
 # JSBSim WASM Tooling + TypeScript SDK
 
-This fork builds the pinned integration source from [Felipegalind0/jsbsim](https://github.com/Felipegalind0/jsbsim) to WebAssembly for Node.js and browsers, and ships a TypeScript SDK for loading and interacting with `FGFDMExec`. Native JSBSim originates with [JSBSim-Team/jsbsim](https://github.com/JSBSim-Team/jsbsim); this wrapper preserves the upstream SDK authorship.
+This directory builds its enclosing [JSBSim repository](https://github.com/Felipegalind0/jsbsim) to WebAssembly for Node.js and browsers, and ships a TypeScript SDK for loading and interacting with `FGFDMExec`. Engine and SDK come from one captured repository revision. Native JSBSim originates with [JSBSim-Team/jsbsim](https://github.com/JSBSim-Team/jsbsim); this wrapper preserves the upstream SDK authorship.
 
 > [!WARNING]  
 > This toolkit is still in early development and may contain bugs or unexpected behavior.
@@ -9,7 +9,7 @@ This fork builds the pinned integration source from [Felipegalind0/jsbsim](https
 
 ## Highlights
 
-- Native source is pinned by commit, archive SHA-256 and extracted-content digest in `jsbsim-source.lock.json`.
+- Engine, bindings and SDK use the same Git revision and immutable source snapshot. The old source lock/archive are historical references and cannot select a build.
 - `FGFDMExec` bindings are generated automatically from `FGFDMExec.h`.
 - No static data preloading is used.
 - Runtime data lives in Emscripten MEMFS for speed.
@@ -18,22 +18,23 @@ This fork builds the pinned integration source from [Felipegalind0/jsbsim](https
 
 ## Installation and build
 
-The local fork package is `@felipegalind0/jsbsim-wasm`, initially `1.2.4-fork.1`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
+The local fork package is `@felipegalind0/jsbsim-wasm`, `1.2.4-fork.2`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
 
 Use the Node, npm, CMake and Emscripten versions in `build-toolchain.lock.json`, with `emcmake` and `em++` in `PATH`:
 
 ```bash
+cd wasm
 npm ci
-# Clean SDK revision, verified pinned native archive:
+# Clean enclosing JSBSim repository:
 npm run build
-# Or explicit local development using the canonical native checkout:
-npm run build:local -- --jsbsim-source=../jsbsim
+# Or explicitly capture uncommitted development changes:
+npm run build:dev
 npm run pack:build
 ```
 
 The orchestrator captures stable source inputs, generates bindings, builds WASM and TypeScript, runs the SDK checks, and assembles an identified package under `build/artifacts/`. Failed builds do not replace accepted artifacts. Canonical `dist/` is not a build or packaging input. The legacy partial-build aliases invoke the same full pipeline.
 
-Normal builds do not fetch native source, alter Git branches or versions, apply vendor patches, publish, or push. See [the source and build contract](docs/centralized-builds.md) for capture boundaries, pinned/local modes, metadata, package integrity and rollback.
+Normal builds do not fetch native source, alter Git branches or versions, apply vendor patches, publish, or push. See [the source and build contract](docs/centralized-builds.md) for capture boundaries, clean/development builds, metadata, package integrity and rollback.
 
 ## SDK Usage
 
@@ -220,7 +221,7 @@ npm test
 npm run typecheck
 ```
 
-Real-WASM tests and benchmarks use the C172 model and runtime files from the same resolved native snapshot that was compiled. Checks reject changed SDK inputs, local native inputs or artifact bytes rather than silently testing an older build. Results establish software behavior; they do not establish aircraft calibration.
+Real-WASM tests and benchmarks use the C172 model and runtime files from the same resolved native snapshot that was compiled. Checks reject changed SDK inputs, enclosing repository inputs or artifact bytes rather than silently testing an older build. Results establish software behavior; they do not establish aircraft calibration.
 
 ## Updating native source and packaging
 
@@ -235,7 +236,7 @@ npm run update:jsbsim -- \
 
 The updater validates and hashes the archive and writes only the lock. It does not select latest upstream, modify a checkout, increment package versions or commit. Keep the reviewed source archive and lock together.
 
-`npm run pack:build` packs only a checked immutable artifact; `npm run release` additionally requires clean pinned inputs. These commands write a tarball and external integrity record under `build/packages/`; neither publishes nor performs Git operations. Direct canonical `npm pack` is blocked because canonical `dist/` may contain a historical build.
+`npm run pack:build` packs only a checked immutable artifact; `npm run release` additionally requires clean inputs from one repository revision. These commands write a tarball and external integrity record under `build/packages/`; neither publishes nor performs Git operations. Direct canonical `npm pack` is blocked because canonical `dist/` may contain a historical build.
 
 The former automatic updater workflow now verifies the committed lock and builds a checked package with read-only repository permissions. It does not create dependency PRs. Demo deployment is manual. Publication and upstream contributions require separate review and authorization.
 

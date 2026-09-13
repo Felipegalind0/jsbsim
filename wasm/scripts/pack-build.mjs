@@ -14,9 +14,9 @@ for (const argument of process.argv.slice(2)) {
 const artifactRoot = candidate ? path.resolve(candidate) : JSON.parse(await readFile(path.join(root, "build/last-build.json"), "utf8")).artifactRoot;
 const metadata = JSON.parse(await readFile(path.join(artifactRoot, "dist/build-metadata.json"), "utf8"));
 if (metadata.validation?.status !== "passed") throw new Error("Artifact has no passed build validation.");
-const releaseEligible = metadata.identity.build.mode === "pinned" && !metadata.identity.native.dirty && !metadata.identity.sdk.dirty;
+const releaseEligible = metadata.identity.schemaVersion === 2 && metadata.identity.build.mode === "in-tree" && metadata.identity.sdk.path === "wasm" && metadata.identity.native.commit === metadata.identity.sdk.commit && !metadata.identity.native.dirty && !metadata.identity.sdk.dirty;
 if (release && !releaseEligible) {
-  throw new Error("Release packing requires pinned, clean native and SDK inputs.");
+  throw new Error("Release packing requires clean native and SDK inputs from the same repository revision.");
 }
 const actual = Object.fromEntries((await contentManifest(path.join(artifactRoot, "dist")))
   .filter(file => file.path !== "build-metadata.json").map(file => [file.path, file.sha256]));

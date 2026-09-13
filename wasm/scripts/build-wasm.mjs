@@ -18,8 +18,9 @@ const run = (command, args) => {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(command + " failed with " + (result.signal ?? result.status));
 };
-run("emcmake", ["cmake", "-S", path.join(workspace, "cmake"), "-B", descriptor.wasmBuildRoot,
-  "-DJSBSIM_SOURCE_DIR=" + descriptor.native.root,
+run("emcmake", ["cmake", "-S", descriptor.native.root, "-B", descriptor.wasmBuildRoot,
+  "-DBUILD_WASM_MODULE=ON", "-DBUILD_DOCS=OFF", "-DBUILD_PYTHON_MODULE=OFF",
+  "-DBUILD_JULIA_PACKAGE=OFF", "-DBUILD_MATLAB_SFUNCTION=OFF", "-DBUILD_SHARED_LIBS=OFF", "-DSYSTEM_EXPAT=OFF",
   "-DJSBSIM_WASM_BINDINGS=" + path.join(workspace, "generated/FGFDMExecBindings.cpp"),
   "-DJSBSIM_BINDINGS_MANIFEST=" + path.join(workspace, "generated/bindings-manifest.json"),
   "-DJSBSIM_WASM_EXTENSION_DIR=" + path.join(workspace, "bindings"),

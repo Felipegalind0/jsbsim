@@ -1,6 +1,6 @@
 {
   "name": "@felipegalind0/jsbsim-wasm",
-  "version": "1.2.4-fork.1",
+  "version": "1.2.4-fork.2",
   "description": "Tooling and TypeScript SDK for JSBSim compiled to WebAssembly",
   "license": "MIT",
   "type": "module",
@@ -40,7 +40,6 @@
     "bench:property-batch": "node scripts/run-built-check.mjs bench",
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/run-built-check.mjs typecheck",
-    "update:jsbsim": "node scripts/update-source-lock.mjs",
     "release:metadata": "node scripts/write-publish-metadata.mjs",
     "release": "node scripts/pack-build.mjs --release",
     "demo:install": "npm --prefix demo install",
@@ -53,10 +52,10 @@
     "demo:preview": "npm --prefix demo run preview",
     "clean": "node -e \"console.error('Build inputs and accepted artifacts are retained; remove only a reviewed failed attempt explicitly.'); process.exitCode=1\"",
     "build:metadata": "node scripts/write-build-metadata.mjs",
-    "build:local": "node scripts/build.mjs --mode=local",
     "test:source": "node --test test/source-contract.test.mjs",
     "pack:build": "node scripts/pack-build.mjs",
-    "prepack": "node -e \"throw new Error('Use npm run pack:build for an identified, checked immutable candidate.')\""
+    "prepack": "node -e \"throw new Error('Use npm run pack:build for an identified, checked immutable candidate.')\"",
+    "build:dev": "node scripts/build.mjs --allow-dirty"
   },
   "engines": {
     "node": ">=20"
@@ -68,6 +67,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Felipegalind0/jsbsim-wasm.git"
+    "url": "https://github.com/Felipegalind0/jsbsim.git",
+    "directory": "wasm"
   }
 }

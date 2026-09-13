@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { contentManifest, gitIdentity, manifestSha256, nativeInputRoots, readDescriptor, sdkCaptureOptions, verifyContent, verifyGeneratedBindings, verifyWorkspaceInputs } from "./build-system/source.mjs";
+import { contentManifest, gitIdentity, manifestSha256, nativeInputRoots, readDescriptor, verifyContent, verifyGeneratedBindings, verifyWorkspaceInputs } from "./build-system/source.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const operation = process.argv[2];
@@ -14,16 +14,12 @@ await verifyContent(descriptor.native.root, descriptor.native.manifest);
 await verifyContent(descriptor.sdk.root, descriptor.sdk.manifest);
 await verifyWorkspaceInputs(descriptor);
 await verifyGeneratedBindings(descriptor);
-if ((await gitIdentity(root)).commit !== descriptor.sdk.commit || manifestSha256(await contentManifest(root, sdkCaptureOptions)) !== descriptor.sdk.contentSha256) {
-  throw new Error("SDK inputs changed after the accepted build; rebuild before checking this source revision.");
-}
-if (descriptor.identity.build.mode === "local") {
-  const origin = descriptor.native.originRoot;
-  const liveIdentity = await gitIdentity(origin);
-  const liveManifest = await contentManifest(origin, { roots: await nativeInputRoots(origin) });
-  if (liveIdentity.commit !== descriptor.native.commit || manifestSha256(liveManifest) !== descriptor.native.contentSha256) {
-    throw new Error("Canonical native inputs changed after the accepted build; rebuild before checking this source revision.");
-  }
+const origin = descriptor.native.originRoot;
+const liveIdentity = await gitIdentity(origin);
+const liveManifest = await contentManifest(origin, { roots: await nativeInputRoots(origin) });
+if (liveIdentity.commit !== descriptor.native.commit || liveIdentity.dirty !== descriptor.native.dirty ||
+    manifestSha256(liveManifest) !== descriptor.native.contentSha256) {
+  throw new Error("Repository inputs changed after the accepted build; rebuild before checking this source revision.");
 }
 const metadata = JSON.parse(await readFile(path.join(candidate.artifactRoot, "dist/build-metadata.json"), "utf8"));
 const actual = Object.fromEntries((await contentManifest(path.join(candidate.artifactRoot, "dist")))
