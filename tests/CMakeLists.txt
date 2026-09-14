@@ -35,6 +35,7 @@ set(PYTHON_TESTS ResetOutputFiles
                  TestExternalReactions
                  TestTurbine
                  TestTurbineTrimSpool
+                 TestTurbineTrimFuelFlow
                  TestAeroFuncFrame
                  TestTemplateFunctions
                  TestDensityAltitude
