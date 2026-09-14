@@ -18,7 +18,7 @@ This directory builds its enclosing [JSBSim repository](https://github.com/Felip
 
 ## Installation and build
 
-The local fork package is `@felipegalind0/jsbsim-wasm`, `1.2.4-fork.3`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
+The local fork package is `@felipegalind0/jsbsim`, `1.2.4-fork.5`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
 
 Use the Node, npm, CMake and Emscripten versions in `build-toolchain.lock.json`, with `emcmake` and `em++` in `PATH`:
 
@@ -46,8 +46,8 @@ Normal builds do not fetch native source, alter Git branches or versions, apply 
 ### Basic lifecycle
 
 ```ts
-import { JSBSimSdk } from "@felipegalind0/jsbsim-wasm";
-import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim-wasm/wasm";
+import { JSBSimSdk } from "@felipegalind0/jsbsim";
+import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim/wasm";
 
 const sdk = await JSBSimSdk.create({
   moduleUrl: wasmModuleUrl,
@@ -96,16 +96,16 @@ await sdk.syncToPersistence();
 Use the package `/wasm` export to reference the bundled runtime artifacts:
 
 ```ts
-import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim-wasm/wasm";
+import { wasmBinaryUrl, wasmModuleUrl } from "@felipegalind0/jsbsim/wasm";
 ```
 
 Raw artifact subpaths are also exported:
 
-- `@felipegalind0/jsbsim-wasm/wasm/module`
-- `@felipegalind0/jsbsim-wasm/wasm/binary`
+- `@felipegalind0/jsbsim/wasm/module`
+- `@felipegalind0/jsbsim/wasm/binary`
 
 > [!WARNING]  
-> To use the binary/module URLs you must disable dependancy optimisation in your bundler. For example, in Vite, set `optimizeDeps.exclude: ["@felipegalind0/jsbsim-wasm"]`. Alternatively, upload the WASM binary/module file to `public/` and pass the URL directly.
+> To use the binary/module URLs you must disable dependancy optimisation in your bundler. For example, in Vite, set `optimizeDeps.exclude: ["@felipegalind0/jsbsim"]`. Alternatively, upload the WASM binary/module file to `public/` and pass the URL directly.
 
 ### Enums and mode flags
 
@@ -114,7 +114,7 @@ import {
   JSBSimSdk,
   TrimMode,
   ResetToInitialConditionsMode
-} from "@felipegalind0/jsbsim-wasm";
+} from "@felipegalind0/jsbsim";
 
 const sdk = await JSBSimSdk.create();
 
@@ -198,7 +198,7 @@ roll/side velocity, slip and steering angles, and the roll/side and body-axis
 reaction forces JSBSim applied.
 
 ```ts
-import { GEAR_CONTACT_FIELDS } from "@felipegalind0/jsbsim-wasm";
+import { GEAR_CONTACT_FIELDS } from "@felipegalind0/jsbsim";
 
 const contacts = sdk.createGearContactReader();
 sdk.run();
@@ -243,10 +243,10 @@ The former automatic updater workflow now verifies the committed lock and builds
 ## Build identity
 
 ```ts
-import { buildIdentity } from "@felipegalind0/jsbsim-wasm";
+import { buildIdentity } from "@felipegalind0/jsbsim";
 ```
 
-The identity records native and SDK commits, content digests, dirty state, build mode, toolchain and options. The `@felipegalind0/jsbsim-wasm/build-metadata` JSON export adds every distributed file hash, source/dependency lock provenance, generated-binding identity and completed checks. Tarball integrity is recorded externally to avoid self-referential hashes.
+The identity records native and SDK commits, content digests, dirty state, build mode, toolchain and options. The `@felipegalind0/jsbsim/build-metadata` JSON export adds every distributed file hash, source/dependency lock provenance, generated-binding identity and completed checks. Tarball integrity is recorded externally to avoid self-referential hashes.
 
 ## Demo SPA
 

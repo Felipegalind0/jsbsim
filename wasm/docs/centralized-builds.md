@@ -80,7 +80,7 @@ imported without squashing at `d8a6453c082c133219f47e75ffc18ade71749575`.
 Its imported tree is byte-identical to SDK tree
 `1a441ec3d271e302959c8ec7aa23ce8f352f9f45`. The in-tree migration retains the SDK's
 MIT notice and 0x62's authorship, alongside native JSBSim and third-party notices.
-The package scope remains `@felipegalind0/jsbsim-wasm`; version `1.2.4-fork.3`
+The package scope remains `@felipegalind0/jsbsim`; version `1.2.4-fork.5`
 identifies this wrapper package, while the native version/revision is separate.
 
 The old engine archive/lock, generated editor previews, old release binaries and
