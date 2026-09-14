@@ -19,6 +19,8 @@ jobs:
     name: Code coverage
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
+    env:
+      CODECOV_CONFIGURED: ${{ secrets.CODECOV_TOKEN != '' }}
     steps:
       - name: Install Ubuntu packages
         run: |
@@ -39,7 +41,17 @@ jobs:
       - name: Generate coverage report
         working-directory: build
         run: make lcov
+      - name: Preserve generated coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-coverage
+          path: ./build/lcov/data/capture/all_targets.info
+          if-no-files-found: error
+      - name: Report unconfigured fork upload
+        if: github.repository != 'JSBSim-Team/jsbsim' && env.CODECOV_CONFIGURED != 'true'
+        run: echo "Coverage tests and report generation completed. Codecov upload is not configured for this fork; the native-coverage artifact contains the report." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload to Codecov
+        if: github.repository == 'JSBSim-Team/jsbsim' || env.CODECOV_CONFIGURED == 'true'
         uses: codecov/codecov-action@v7
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
