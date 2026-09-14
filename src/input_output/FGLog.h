@@ -212,7 +212,13 @@ public:
   void DisableHighLighting(void) { highlighting = false; }
 
 protected:
+  // Browser/worker log sinks display escape bytes literally. Preserve plain
+  // text for Emscripten while keeping native console formatting available.
+#ifdef __EMSCRIPTEN__
+  bool highlighting = false;
+#else
   bool highlighting = true;
+#endif
   std::string buffer;
   LogLevel min_level = LogLevel::BULK;
 };

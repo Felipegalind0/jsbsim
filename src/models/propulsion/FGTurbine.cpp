@@ -39,6 +39,7 @@ HISTORY
 INCLUDES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 
@@ -351,10 +352,19 @@ double FGTurbine::Trim()
 {
     double idlethrust = MilThrust * IdleThrustLookup->GetValue();
     double milthrust = (MilThrust - idlethrust) * MilThrustLookup->GetValue();
-    double N2 = IdleN2 + ThrottlePos * N2_factor;
-    double N2norm = (N2 - IdleN2) / N2_factor;
-    double thrust = (idlethrust + (milthrust * N2norm * N2norm))
-          * (1.0 - BleedDemand);
+    // Trim establishes steady thrust without advancing time. Keep the
+    // observable spool state consistent with that same operating point.
+    N1 = IdleN1 + ThrottlePos * N1_factor;
+    N2 = IdleN2 + ThrottlePos * N2_factor;
+    N2norm = (N2 - IdleN2) / N2_factor;
+    double dryThrust = idlethrust + (milthrust * N2norm * N2norm);
+    double thrust = dryThrust * (1.0 - BleedDemand);
+
+    // Run() derives fuel flow from the thrust produced before bleed extraction
+    // is deducted. Trim has no time to seek that value, so assign the same
+    // steady product directly; TSFC is evaluated at this operating point.
+    correctedTSFC = TSFC->GetValue();
+    FuelFlow_pph = std::max(IdleFF, dryThrust * correctedTSFC);
 
     if (AugMethod == 1) {
       if ((ThrottlePos > 0.99) && (N2 > 97.0)) {Augmentation = true;}
@@ -363,12 +373,14 @@ double FGTurbine::Trim()
 
     if ((Augmented == 1) && Augmentation && (AugMethod < 2)) {
       thrust = MaxThrust * MaxThrustLookup->GetValue();
+      FuelFlow_pph = thrust * ATSFC->GetValue();
     }
 
     if (AugMethod == 2) {
       if (AugmentCmd > 0.0) {
         double tdiff = (MaxThrust * MaxThrustLookup->GetValue()) - thrust;
         thrust += (tdiff * std::min(AugmentCmd, 1.0));
+        FuelFlow_pph = thrust * ATSFC->GetValue();
       }
     }
 
@@ -426,6 +438,19 @@ bool FGTurbine::Load(FGFDMExec* exec, Element *el)
       function_element->SetAttributeValue("name", string("propulsion/engine[#]/") + name);
 
     function_element = el->FindNextElement("function");
+  }
+
+  // Reject a bad value before FGEngine::Load ties engine properties: throwing
+  // after that leaves the ties behind for an engine that is never constructed.
+  bool idleFuelFlowConfigured = false;
+  if (Element* idleFF = el->FindElement("idlefuelflow")) {
+    IdleFF = el->FindElementValueAsNumber("idlefuelflow");
+    if (IdleFF < 0.0) {
+      XMLLogException err(idleFF);
+      err << "<idlefuelflow> is a fuel flow in lbm/hr and cannot be negative.\n";
+      throw err;
+    }
+    idleFuelFlowConfigured = true;
   }
 
   FGEngine::Load(exec, el);
@@ -527,7 +552,12 @@ bool FGTurbine::Load(FGFDMExec* exec, Element *el)
   N1_factor = MaxN1 - IdleN1;
   N2_factor = MaxN2 - IdleN2;
   OilTemp_degK = in.TAT_c + 273.0;
-  IdleFF = pow(MilThrust, 0.2) * 107.0;  // just an estimate
+  // Idle fuel flow floors every operating point and is what a spooling engine
+  // seeks, so a wrong value shows up across the whole throttle range. The
+  // fallback below is a thrust-only estimate that cannot know the engine's
+  // actual idle schedule; <idlefuelflow> lets a model supply a measured one.
+  if (!idleFuelFlowConfigured)
+    IdleFF = pow(MilThrust, 0.2) * 107.0;  // just an estimate
 
   bindmodel(exec->GetPropertyManager().get());
   return true;

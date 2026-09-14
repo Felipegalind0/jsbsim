@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "origin": "https://github.com/Felipegalind0/jsbsim",
+  "commit": "61b3132947dde7bc46827fd9fe3eef31193336d2",
+  "archive": {
+    "path": "sources/jsbsim-61b3132947dde7bc46827fd9fe3eef31193336d2.tar.gz",
+    "sha256": "07fc24b07825821132284152b5cd0399ffe205badc35f1c42b4429288628ea69"
+  },
+  "contentSha256": "c249a62174ef743d9b22ee252621243decbc2dfff633e188e37dea23b01eb406"
+}

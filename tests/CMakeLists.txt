@@ -3,6 +3,7 @@ set(PYTHON_TESTS ResetOutputFiles
                  TestICOverride
                  RunCheckCases
                  TestModelLoading
+                 TestModelReload
                  TestActuator
                  TestGustReset
                  TestPointMassInertia
@@ -33,6 +34,9 @@ set(PYTHON_TESTS ResetOutputFiles
                  TestEngineIndexedProps
                  TestExternalReactions
                  TestTurbine
+                 TestTurbineTrimSpool
+                 TestTurbineTrimFuelFlow
+                 TestTurbineIdleFuelFlow
                  TestAeroFuncFrame
                  TestTemplateFunctions
                  TestDensityAltitude
@@ -41,6 +45,7 @@ set(PYTHON_TESTS ResetOutputFiles
                  TestStdAtmosphere
                  TestMiscellaneous
                  TestGndReactions
+                 TestWheelSpin
                  TestIntegrators
                  TestSwitch
                  TestGain

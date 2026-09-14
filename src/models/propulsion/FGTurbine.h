@@ -93,6 +93,7 @@ CLASS DOCUMENTATION
   <ignitionn2> {number} </ignitionn2>
   <idlen1> {number} </idlen1>
   <idlen2> {number} </idlen2>
+  <idlefuelflow> {number} </idlefuelflow>
   <n1spinup> {number} </n1spinup>
   <n2spinup> {number} </n2spinup>
   <n1startrate> {number} </n1startrate>
@@ -122,6 +123,9 @@ CLASS DOCUMENTATION
   ignitionn2  - Core rotor rpm (% of max) while starting
   idlen1      - Fan rotor rpm (% of max) at idle
   idlen2      - Core rotor rpm (% of max) at idle
+  idlefuelflow - Fuel flow at idle, lbm/hr. Floors the steady fuel flow at
+               every operating point. When omitted it is estimated from
+               milthrust alone as 107 * milthrust^0.2
   n1spinup    - Fan rotor rpm starter acceleration to ignitionn1 value (default 1.0)
   n2spinup    - Core rotor rpm starter acceleration to ignitionn2 value (default 3.0)
   n1startrate - Fan rotor rpm time taken to accelerate from ignitionn1 to idlen1 value (default 1.4)
