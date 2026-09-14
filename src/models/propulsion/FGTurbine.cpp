@@ -440,6 +440,19 @@ bool FGTurbine::Load(FGFDMExec* exec, Element *el)
     function_element = el->FindNextElement("function");
   }
 
+  // Reject a bad value before FGEngine::Load ties engine properties: throwing
+  // after that leaves the ties behind for an engine that is never constructed.
+  bool idleFuelFlowConfigured = false;
+  if (Element* idleFF = el->FindElement("idlefuelflow")) {
+    IdleFF = el->FindElementValueAsNumber("idlefuelflow");
+    if (IdleFF < 0.0) {
+      XMLLogException err(idleFF);
+      err << "<idlefuelflow> is a fuel flow in lbm/hr and cannot be negative.\n";
+      throw err;
+    }
+    idleFuelFlowConfigured = true;
+  }
+
   FGEngine::Load(exec, el);
 
   ResetToIC();
@@ -539,7 +552,12 @@ bool FGTurbine::Load(FGFDMExec* exec, Element *el)
   N1_factor = MaxN1 - IdleN1;
   N2_factor = MaxN2 - IdleN2;
   OilTemp_degK = in.TAT_c + 273.0;
-  IdleFF = pow(MilThrust, 0.2) * 107.0;  // just an estimate
+  // Idle fuel flow floors every operating point and is what a spooling engine
+  // seeks, so a wrong value shows up across the whole throttle range. The
+  // fallback below is a thrust-only estimate that cannot know the engine's
+  // actual idle schedule; <idlefuelflow> lets a model supply a measured one.
+  if (!idleFuelFlowConfigured)
+    IdleFF = pow(MilThrust, 0.2) * 107.0;  // just an estimate
 
   bindmodel(exec->GetPropertyManager().get());
   return true;
