@@ -18,7 +18,7 @@ This directory builds its enclosing [JSBSim repository](https://github.com/Felip
 
 ## Installation and build
 
-The local fork package is `@felipegalind0/jsbsim`, `1.2.4-fork.5`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
+The local fork package is `@felipegalind0/jsbsim`, `1.2.4-fork.6`. It is not published by this workflow. Install the exact checked tarball recorded in `build/last-package.json`; the native revision is identified separately by `buildIdentity.native.commit`.
 
 Use the Node, npm, CMake and Emscripten versions in `build-toolchain.lock.json`, with `emcmake` and `em++` in `PATH`:
 
