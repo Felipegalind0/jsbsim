@@ -75,6 +75,10 @@ jobs:
         run: npm run test:source
       - name: Build and exercise the captured repository
         run: npm run build -- --allow-network
+      - name: Install the headless browser
+        run: npx playwright install --with-deps --only-shell --no-remove chromium
+      - name: Verify browser persistence of the built package
+        run: npm run test:browser
       - name: Pack the checked package without publishing
         run: npm run pack:build -- --release
       - uses: actions/upload-artifact@v4

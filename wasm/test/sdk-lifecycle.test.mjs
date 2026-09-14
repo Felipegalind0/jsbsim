@@ -61,6 +61,12 @@ describe("SDK-owned native lifetime", () => {
     assert.throws(() => sdk.runIc(), /destroyed/);
     assert.throws(() => sdk.createPropertyBatch([]), /destroyed/);
     assert.throws(() => sdk.loadModel("a"), /destroyed/);
+    assert.throws(() => sdk.writeDataFile("a", "data"), /destroyed/);
+    assert.throws(() => sdk.readDataFile("a"), /destroyed/);
+    assert.throws(() => sdk.mkdir("a"), /destroyed/);
+    await assert.rejects(sdk.enablePersistence(), /destroyed/);
+    await assert.rejects(sdk.syncFromPersistence(), /destroyed/);
+    await assert.rejects(sdk.syncToPersistence(), /destroyed/);
   });
 
   it("does not delete explicitly disposed children twice", async () => {
@@ -233,5 +239,72 @@ describe("partial native child construction", () => {
     });
     sdk.destroy();
     assert.deepEqual(events, ["exec.delete"]);
+  });
+});
+
+describe("persistence boundaries", () => {
+  it("rejects equal and nested normalized roots before loading a runtime", async () => {
+    for (const [runtimeRoot, idbMountPath] of [
+      ["/runtime", "/runtime"], ["/runtime", "/runtime/persist"],
+      ["/persist/runtime", "/persist"], ["/", "/persist"],
+      ["/runtime", "/"], ["//runtime/./", "/runtime"],
+      ["/runtime", "/other/../runtime"], ["relative", "relative/persist"],
+    ]) {
+      let calls = 0;
+      await assert.rejects(JSBSimSdk.create({ runtimeRoot,
+        persistence: { idbMountPath },
+        moduleFactory: async () => { calls++; throw new Error("must not load"); },
+      }), /disjoint/);
+      assert.equal(calls, 0);
+    }
+  });
+
+  it("does not confuse sibling prefixes with nested directories", async () => {
+    let root;
+    const sdk = await JSBSimSdk.create({ runtimeRoot: "/data/./runtime",
+      persistence: { idbMountPath: "/data/runtime-cache/" },
+      log: { console: false },
+      moduleFactory: async () => ({
+        FGFDMExec: class {
+          SetRootDir(value) { root = value; }
+          SetAircraftPath() {} SetEnginePath() {} SetSystemsPath() {} SetOutputPath() {}
+          delete() {}
+        },
+        FS: { analyzePath: () => ({ exists: true }) },
+      }),
+    });
+    assert.equal(root, "/data/runtime");
+    assert.equal(sdk.vfs.idbMountPath, "/data/runtime-cache");
+    sdk.destroy();
+  });
+
+  it("rejects persistence when IndexedDB or its backend is unavailable", async () => {
+    const { sdk } = await fixture();
+    try {
+      sdk.module.FS.filesystems = { MEMFS: {} };
+      await assert.rejects(sdk.enablePersistence(), /IDBFS is unavailable/);
+      await assert.rejects(sdk.syncFromPersistence(), /not mounted/);
+      await assert.rejects(sdk.syncToPersistence(), /not mounted/);
+    } finally { sdk.destroy(); }
+  });
+
+  it("retains both executive initialization and cleanup failures", async () => {
+    const failure = new Error("configuration failed");
+    const cleanupFailure = new Error("delete failed");
+    await assert.rejects(JSBSimSdk.create({
+      log: { console: false },
+      moduleFactory: async () => ({
+        FGFDMExec: class {
+          SetRootDir() { throw failure; }
+          delete() { throw cleanupFailure; }
+        },
+        FS: { analyzePath: () => ({ exists: true }) },
+      }),
+    }), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors[0], failure);
+      assert.deepEqual(error.errors[1].errors, [cleanupFailure]);
+      return true;
+    });
   });
 });

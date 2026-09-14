@@ -3,11 +3,13 @@ import type { BinaryLike, EmscriptenFs, JSBSimRuntimeModule } from "./types";
 const ROOT_SEPARATOR = "/";
 
 function normalizePath(path: string): string {
-  if (!path) {
-    return ROOT_SEPARATOR;
+  if (path.includes("\0")) throw new TypeError("Virtual filesystem paths cannot contain NUL.");
+  const parts: string[] = [];
+  for (const part of path.split(ROOT_SEPARATOR)) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
   }
-
-  const parts = path.split(ROOT_SEPARATOR).filter(Boolean);
   return `${ROOT_SEPARATOR}${parts.join(ROOT_SEPARATOR)}`;
 }
 
@@ -87,10 +89,23 @@ export class WasmVfsManager {
 
   private idbMounted = false;
 
+  /** Persistence copies complete trees, so their normalized roots must be disjoint. */
+  static resolveRoots(runtimeRoot: string, idbMountPath: string): { runtimeRoot: string; idbMountPath: string } {
+    runtimeRoot = normalizePath(runtimeRoot);
+    idbMountPath = normalizePath(idbMountPath);
+    const contains = (parent: string, child: string): boolean =>
+      parent === ROOT_SEPARATOR || child === parent || child.startsWith(parent + ROOT_SEPARATOR);
+    if (contains(runtimeRoot, idbMountPath) || contains(idbMountPath, runtimeRoot)) {
+      throw new RangeError("Runtime and persistence roots must be disjoint directories.");
+    }
+    return { runtimeRoot, idbMountPath };
+  }
+
   constructor(module: JSBSimRuntimeModule, runtimeRoot: string, idbMountPath: string) {
+    const roots = WasmVfsManager.resolveRoots(runtimeRoot, idbMountPath);
     this.fs = module.FS;
-    this.runtimeRoot = normalizePath(runtimeRoot);
-    this.idbMountPath = normalizePath(idbMountPath);
+    this.runtimeRoot = roots.runtimeRoot;
+    this.idbMountPath = roots.idbMountPath;
 
     ensureDir(this.fs, this.runtimeRoot);
   }

@@ -45,6 +45,11 @@ if(CXXTEST_FOUND)
 endif(CXXTEST_FOUND)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(BUILD_WASM_MODULE)
+  # Engine object libraries must retain their C++ catch blocks as well as the
+  # bindings. Enabling exceptions only at the final link cannot restore them.
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fexceptions>)
+endif()
 add_subdirectory(src)
 
 if(BUILD_WASM_MODULE)

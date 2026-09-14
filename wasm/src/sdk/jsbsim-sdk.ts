@@ -53,6 +53,10 @@ export class JSBSimSdk extends JSBSimApi {
    * Loads the JSBSim runtime module, creates `FGFDMExec`, and initializes VFS.
    */
   static async create(options: JSBSimSdkOptions = {}): Promise<JSBSimSdk> {
+    const { runtimeRoot, idbMountPath } = WasmVfsManager.resolveRoots(
+      options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT,
+      options.persistence?.idbMountPath ?? DEFAULT_IDB_ROOT,
+    );
     const originalLog = options.log;
     let bufferedLogEntries: JSBSimLogEntry[] = [];
     let emitSdkLog: ((entry: JSBSimLogEntry) => void) | null = null;
@@ -76,9 +80,6 @@ export class JSBSimSdk extends JSBSimApi {
         },
       },
     });
-    const runtimeRoot = options.runtimeRoot ?? DEFAULT_RUNTIME_ROOT;
-    const idbMountPath = options.persistence?.idbMountPath ?? DEFAULT_IDB_ROOT;
-
     const vfs = new WasmVfsManager(module, runtimeRoot, idbMountPath);
     if (options.persistence?.enabled) {
       await vfs.enablePersistence();
@@ -291,6 +292,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Writes data to MEMFS (relative to runtime root) and returns resolved path.
    */
   writeDataFile(path: string, data: BinaryLike): string {
+    this.requireAlive();
     return this.vfs.writeRuntimeFile(path, data);
   }
 
@@ -298,6 +300,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Reads data from MEMFS (relative to runtime root).
    */
   readDataFile(path: string, encoding: "utf8" | "binary" = "utf8"): string | Uint8Array {
+    this.requireAlive();
     return this.vfs.readRuntimeFile(path, encoding);
   }
 
@@ -305,6 +308,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Creates a runtime directory and returns resolved path.
    */
   mkdir(path: string): string {
+    this.requireAlive();
     return this.vfs.mkdirRuntime(path);
   }
 
@@ -312,6 +316,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Synchronizes IDBFS -> MEMFS when persistence is enabled.
    */
   async syncFromPersistence(): Promise<void> {
+    this.requireAlive();
     await this.vfs.syncFromPersistence();
   }
 
@@ -319,6 +324,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Synchronizes MEMFS -> IDBFS when persistence is enabled.
    */
   async syncToPersistence(): Promise<void> {
+    this.requireAlive();
     await this.vfs.syncToPersistence();
   }
 
@@ -326,6 +332,7 @@ export class JSBSimSdk extends JSBSimApi {
    * Mounts IDBFS and performs an initial pull.
    */
   async enablePersistence(): Promise<void> {
+    this.requireAlive();
     await this.vfs.enablePersistence();
   }
 

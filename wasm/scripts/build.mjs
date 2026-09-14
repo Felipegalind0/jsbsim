@@ -174,8 +174,9 @@ async function build(options) {
   run(path.join(cwd, "node_modules", ".bin", "tsup"), ["--config", "tsup.config.ts"]);
   run(path.join(cwd, "node_modules", ".bin", "tsc"), ["--noEmit"]);
   commands.push("tsc --noEmit (frozen SDK workspace)");
-  run(process.execPath, ["--test", "test/"]);
-  commands.push("node --test test/ (frozen SDK workspace and resolved native fixtures)");
+  const testFiles = (await readdir(path.join(cwd, "test"))).filter(name => name.endsWith(".test.mjs")).sort();
+  run(process.execPath, ["--test", ...testFiles.map(name => "test/" + name)]);
+  commands.push("node --test test/*.test.mjs (frozen SDK workspace and resolved native fixtures)");
   await finalize(descriptor, commands);
 }
 

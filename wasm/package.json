@@ -1,6 +1,6 @@
 {
   "name": "@felipegalind0/jsbsim-wasm",
-  "version": "1.2.4-fork.3",
+  "version": "1.2.4-fork.4",
   "description": "Tooling and TypeScript SDK for JSBSim compiled to WebAssembly",
   "license": "MIT",
   "type": "module",
@@ -55,7 +55,8 @@
     "test:source": "node --test test/source-contract.test.mjs",
     "pack:build": "node scripts/pack-build.mjs",
     "prepack": "node -e \"throw new Error('Use npm run pack:build for an identified, checked immutable candidate.')\"",
-    "build:dev": "node scripts/build.mjs --allow-dirty"
+    "build:dev": "node scripts/build.mjs --allow-dirty",
+    "test:browser": "node test/browser-persistence.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -63,7 +64,8 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsup": "^8.5.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "playwright": "1.63.0"
   },
   "repository": {
     "type": "git",

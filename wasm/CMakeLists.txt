@@ -49,6 +49,7 @@ target_link_options(jsbsim_wasm PRIVATE
   -sEXPORT_NAME=JSBSimWasmModule
   -sENVIRONMENT=web,worker,node
   -sFILESYSTEM=1
+  -lidbfs.js
   -sALLOW_MEMORY_GROWTH=1
   -sNO_DISABLE_EXCEPTION_CATCHING
   -sWASM_BIGINT=1

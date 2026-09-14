@@ -88,6 +88,26 @@ describe("real WASM lifetime and diagnostics", () => {
     } finally { sdk.destroy(); }
   });
 
+  it("preserves native exception handling when invalid propulsion rejects a load", async () => {
+    const sdk = await createC172();
+    try {
+      const original = readFileSync(path.join(nativeRoot, "aircraft/c172p/c172p.xml"), "utf8");
+      // FGPropulsion::Load throws XMLLogException for this missing element,
+      // then catches it in the native implementation and returns false.
+      // A link-only exception flag cannot restore that catch if the native
+      // object files were compiled with Emscripten's default catch disabling.
+      const invalid = original.replace(/<thruster\b[^>]*>[\s\S]*?<\/thruster>/, "");
+      assert.notEqual(invalid, original, "The fixture must contain the removed thruster");
+      sdk.writeDataFile("aircraft/missing-thruster/missing-thruster.xml", invalid);
+      assert.equal(sdk.loadModel("missing-thruster"), false);
+      assert.equal(sdk.loadModel("c172p"), true);
+      assert.equal(sdk.runIc(), true);
+      assert.equal(sdk.run(), true);
+      assert.ok(Number.isFinite(sdk.getPropertyValue("velocities/u-fps")));
+    } finally { sdk.destroy(); }
+    assert.equal(sdk.exec.isDeleted(), true);
+  });
+
   it("frees a real executive when initialization fails after allocation", async () => {
     const factory = (await import(wasmModuleUrl)).default;
     const failure = new Error("injected path configuration failure");
