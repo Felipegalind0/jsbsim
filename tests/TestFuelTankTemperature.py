@@ -206,5 +206,13 @@ class TestFuelTankTemperature(JSBSimTestCase):
         self.assertNotIn('Fahrenheit', logger.buffer,
                          msg="The startup message still labels a Celsius value as Fahrenheit:\n"+logger.buffer)
 
+        # The second tank has no initial temperature, so the message must say
+        # so rather than echoing the -9999.0 flag as if it were one.
+        self.assertIn('Initial temperature: not set, fuel temperature is not modeled',
+                      logger.buffer,
+                      msg="The startup message does not report the tank without an initial temperature:\n"+logger.buffer)
+        self.assertNotIn('-9999', logger.buffer,
+                         msg="The startup message still echoes the 'no temperature set' flag:\n"+logger.buffer)
+
 
 RunTest(TestFuelTankTemperature)

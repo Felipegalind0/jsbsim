@@ -556,7 +556,10 @@ void FGTank::Debug(int from)
       log << "      currently at " << PctFull << "% of maximum capacity\n";
       log << "      Tank location (X, Y, Z): " << vXYZ(eX) << ", " << vXYZ(eY) << ", " << vXYZ(eZ) << "\n";
       log << "      Effective radius: " << Radius << " inches\n";
-      log << "      Initial temperature: " << Temperature << " Celsius\n";
+      if (Temperature == -9999.0)
+        log << "      Initial temperature: not set, fuel temperature is not modeled\n";
+      else
+        log << "      Initial temperature: " << Temperature << " Celsius\n";
       log << "      Priority: " << Priority << "\n";
     }
   }
