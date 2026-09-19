@@ -352,11 +352,16 @@ double FGTurbine::Trim()
 {
     double idlethrust = MilThrust * IdleThrustLookup->GetValue();
     double milthrust = (MilThrust - idlethrust) * MilThrustLookup->GetValue();
-    // Trim establishes steady thrust without advancing time. Keep the
-    // observable spool state consistent with that same operating point.
-    N1 = IdleN1 + ThrottlePos * N1_factor;
-    N2 = IdleN2 + ThrottlePos * N2_factor;
-    N2norm = (N2 - IdleN2) / N2_factor;
+    double steadyN2 = IdleN2 + ThrottlePos * N2_factor;
+    // Trim establishes steady thrust without advancing time. Keep a running
+    // engine's observable spool state consistent with that operating point.
+    // Zero-time evaluations, such as RunIC(), can reach Trim even when the
+    // engine is off. Such an engine keeps its (possibly windmilling) spools.
+    if (Running) {
+      N1 = IdleN1 + ThrottlePos * N1_factor;
+      N2 = steadyN2;
+    }
+    N2norm = (steadyN2 - IdleN2) / N2_factor;
     double dryThrust = idlethrust + (milthrust * N2norm * N2norm);
     double thrust = dryThrust * (1.0 - BleedDemand);
 
@@ -367,7 +372,7 @@ double FGTurbine::Trim()
     FuelFlow_pph = std::max(IdleFF, dryThrust * correctedTSFC);
 
     if (AugMethod == 1) {
-      if ((ThrottlePos > 0.99) && (N2 > 97.0)) {Augmentation = true;}
+      if ((ThrottlePos > 0.99) && (steadyN2 > 97.0)) {Augmentation = true;}
       else {Augmentation = false;}
     }
 
