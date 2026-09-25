@@ -180,20 +180,98 @@ CLASS DOCUMENTATION
 
     <h3>Optional wheel rotational degree of freedom (BOGEY only)</h3>
 
-    When both \<wheel_radius> and \<wheel_inertia> are given, the wheel spin
-    rate becomes a state that is resolved together with the ground friction
-    multipliers. The tire tread force is bounded by static_friction times the
-    normal force and acts on the tread slip (axle ground speed minus radius
-    times spin); it reaches the airframe through the axle while the wheel
-    receives the opposite torque, so spin-up at touchdown is paid for by the
-    aircraft's momentum. Brakes and rolling resistance become a torque between
-    the wheel and the airframe, bounded by the usual braking friction force
-    times the radius: a braked wheel holds the same force as without the spin
-    DOF. Wheels in ground contact at initialization or trim start rolling
-    without slip; in the air they spin down at the same 13 ft/s^2 tread rate as
-    wheel-speed-fps, faster with brakes applied. The extra properties
-    gear/unit[i]/wheel-spin-rad_sec and gear/unit[i]/wheel-tread-slip-fps are
-    created. Without these elements the friction model is unchanged.
+    A BOGEY contact gets a wheel spin state when it has both
+    \<wheel_radius> (FT, IN or M) and \<wheel_inertia> (SLUG*FT2 or KG*M2):
+    the wheel's rolling radius, also used as the height of the axle above the
+    contact point, and its moment of inertia about the axle. Both must be
+    positive; otherwise an error is logged and the contact keeps the legacy
+    model.
+
+    <b>In ground contact</b> the spin state is resolved together with the
+    friction multipliers by two constraints:
+    <ul>
+    <li>The tread force acts along the ground-projected rolling direction and
+    drives the tread slip (axle ground speed along that direction minus
+    radius times the spin state) toward zero: rolling without slip. It is
+    bounded by static_friction times the normal load, scaled by the ground's
+    static friction factor. It reaches the airframe at the axle, one radius
+    from the contact point along the ground normal, so its lever arm runs from
+    the CG to the axle. The wheel receives the opposite torque, radius times
+    the force, so spin-up at touchdown is paid for by the aircraft's
+    momentum.</li>
+    <li>A wheel-to-axle torque acts between the wheel and the airframe and
+    drives the wheel's spin relative to the airframe toward zero. It combines
+    the brakes and rolling_friction and is bounded by the legacy
+    rolling-direction force coefficient times the normal load times the
+    radius. That coefficient is rolling_friction plus the normalized brake
+    command times the difference to static_friction, with the ground's
+    friction factors applied. Because the torque targets zero relative spin,
+    a wheel that keeps rolling generally carries the full bound, like Coulomb
+    friction.</li>
+    </ul>
+    While the spin is not accelerating, the reaction of the wheel-to-axle
+    torque on the airframe cancels the moment added by applying the tread
+    force at the axle rather than at the contact point. The side force is
+    unchanged and still acts at the contact point.
+
+    This changes the meaning of \<rolling_friction>. Without the wheel
+    elements it models tire rolling resistance (hysteresis): with the brakes
+    released, it bounds the rolling-direction force at the contact point. With
+    them it enters the wheel-to-axle resisting torque above, combined with the
+    brakes and bounded in ground contact by that force coefficient times the
+    normal load times the radius.
+
+    Wheels in ground contact during trim or at a zero time step (as in RunIC)
+    are set rolling without tread slip. Otherwise RunIC keeps the spin state;
+    ResetToIC zeroes it.
+
+    <b>In the air</b> there is no tire force and the wheel is not part of the
+    friction solve. A separate approximation reduces the spin relative to the
+    airframe toward zero, without reversing it, at an airframe-relative tread
+    deceleration of 13 + 100 * brake ft/s^2, i.e. (13 + 100 * brake) / radius
+    rad/s^2, where brake is the normalized 0 to 1 command of the contact's
+    brake group (0 for NONE). The 13 ft/s^2 is copied from the legacy
+    spin-down of wheel-speed-fps; the 100 ft/s^2 is an uncalibrated value
+    introduced with this model, not a measured brake torque. This
+    approximation claims no fidelity to a measured aircraft and applies no
+    reaction torque to the airframe.
+    The decrement per step is finite. On a positive-time airborne step
+    outside trim, damping reaches zero relative spin only if the decrement
+    is at least the magnitude of the relative spin immediately before
+    damping. Once the wheel has stopped relative to the airframe, it can
+    stay stopped only while the decrement can absorb the magnitude of
+    subsequent changes in the airframe rate projected on the current axle.
+    This approximation does not enforce a rigid brake lock under arbitrary
+    body motion.
+
+    <b>Spin axis.</b> In ground contact it is the ground normal cross the
+    ground-projected rolling direction; in the air it is the gear's up axis
+    cross its steered forward direction.
+    The two coincide when the ground normal lies in the plane spanned by
+    gear up and steered forward and has a positive component along gear up.
+    This includes unsteered gear without \<orientation> in wings-level,
+    upright contact over level ground. The axes can differ when banked or
+    steered with the gear leg tilted. The spin state is not remapped when the
+    axis changes, so the reported airframe-relative rate can jump at a
+    contact transition, by the airframe rate projected on the difference
+    between the two axes. This is a limitation of the idealized axle model,
+    not a modeled gyroscopic effect; continuity is not claimed for banked or
+    steered contact transitions.
+
+    <b>Properties</b>, created only for contacts with both elements:
+    gear/unit[i]/wheel-spin-rad_sec is the spin relative to the airframe
+    about the axis above, in rad/s, positive when rolling forward. The spin
+    state itself is kept in the reference frame of the airframe rates in.PQR
+    (see WheelSpinDOF); the property is that state minus the airframe rate
+    about the current axis, and writing it applies the inverse.
+    gear/unit[i]/wheel-tread-slip-fps is the tread slip defined above,
+    computed from that state, in ft/s; it is 0 in the air.
+
+    Contacts without both elements have no wheel spin state or wheel
+    properties and keep the legacy friction formulation. Their friction rows
+    go through the same solver arithmetic as the wheel rows, which is ordered
+    differently from earlier JSBSim releases, so their floating-point results
+    can differ from those releases.
 
     @author Jon S. Berndt
     @see Richard E. McFarland, "A Standard Kinematic Model for Flight Simulation at
@@ -333,9 +411,17 @@ public:
   double GetSteerAngleDeg(void) const { return radtodeg*SteerAngle; }
   /// True when <wheel_radius> and <wheel_inertia> give this BOGEY a spin DOF.
   bool HasWheelSpin(void) const { return wheelSpinEnabled; }
-  /// Wheel spin rate about the axle in rad/s (0 without a spin DOF).
-  double GetWheelSpinRate(void) const { return wheelSpin.Rate; }
-  /// Tread slip speed (axle ground speed minus radius x spin) in ft/s.
+  /** Wheel spin rate about the axle relative to the airframe, in rad/s.
+      Positive when rolling forward; 0 without a spin DOF. The spin state is
+      kept in the solver's reference frame (see WheelSpinDOF); this returns
+      that state minus the airframe rate about the current spin axis. */
+  double GetWheelSpinRate(void) const;
+  /** Sets the wheel spin rate relative to the airframe, in rad/s, with the
+      same convention as GetWheelSpinRate(). Ignored without a spin DOF. */
+  void SetWheelSpinRate(double rate);
+  /** Tread slip speed (axle ground speed minus radius x spin) in ft/s. It
+      uses the spin state in the solver's reference frame and is 0 in the air.
+  */
   double GetWheelTreadSlip(void) const { return wheelTreadSlip; }
   void SetSteerAngleDeg(double angle) {
     if (eSteerType != stFixed && !Castered)
@@ -426,6 +512,7 @@ private:
   void ComputeGroundFrame(void);
   void ComputeJacobian(const FGColumnVector3& vWhlContactVec);
   void ConfigureWheelSpinRows(const FGColumnVector3& vWhlContactVec);
+  FGColumnVector3 GetWheelSpinAxis(void) const;
   void UpdateForces(void);
   void SetstaticFCoeff(double coeff);
   void CrashDetect(void);
