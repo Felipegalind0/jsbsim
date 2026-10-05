@@ -124,6 +124,8 @@ bool FGAerodynamics::InitModel(void)
   AeroRPShift = 0;
   vDeltaRP.InitMatrix();
   vForces.InitMatrix();
+  vForcesAtCG.InitMatrix();
+  vDXYZcg.InitMatrix();
   vMoments.InitMatrix();
   return true;
 }
@@ -593,6 +595,15 @@ void FGAerodynamics::bind(void)
   PropertyManager->Tie("forces/fbx-aero-lbs",  this, eX, &FGAerodynamics::GetForces);
   PropertyManager->Tie("forces/fby-aero-lbs",  this, eY, &FGAerodynamics::GetForces);
   PropertyManager->Tie("forces/fbz-aero-lbs",  this, eZ, &FGAerodynamics::GetForces);
+  PropertyManager->Tie("forces/fbx-aero-rp-lbs", this, eX, &FGAerodynamics::GetForcesAtRP);
+  PropertyManager->Tie("forces/fby-aero-rp-lbs", this, eY, &FGAerodynamics::GetForcesAtRP);
+  PropertyManager->Tie("forces/fbz-aero-rp-lbs", this, eZ, &FGAerodynamics::GetForcesAtRP);
+  PropertyManager->Tie("forces/fbx-aero-cg-lbs", this, eX, &FGAerodynamics::GetForcesAtCG);
+  PropertyManager->Tie("forces/fby-aero-cg-lbs", this, eY, &FGAerodynamics::GetForcesAtCG);
+  PropertyManager->Tie("forces/fbz-aero-cg-lbs", this, eZ, &FGAerodynamics::GetForcesAtCG);
+  PropertyManager->Tie("aero/rp-body-x-ft", this, eX, &FGAerodynamics::GetResolvedRP);
+  PropertyManager->Tie("aero/rp-body-y-ft", this, eY, &FGAerodynamics::GetResolvedRP);
+  PropertyManager->Tie("aero/rp-body-z-ft", this, eZ, &FGAerodynamics::GetResolvedRP);
   PropertyManager->Tie("moments/l-aero-lbsft", this, eL, &FGAerodynamics::GetMoments);
   PropertyManager->Tie("moments/m-aero-lbsft", this, eM, &FGAerodynamics::GetMoments);
   PropertyManager->Tie("moments/n-aero-lbsft", this, eN, &FGAerodynamics::GetMoments);

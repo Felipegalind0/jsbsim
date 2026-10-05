@@ -248,3 +248,29 @@ package acceptance are separate from native tests. No upstream submission is
 made here. Any upstream review branch must contain only the native observer,
 its header documentation and focused native regression, excluding SDK version
 metadata and downstream aircraft data, under the linked contribution policy.
+
+## Cached force observations — 2026-10-05
+
+`propulsion/engine[n]/body-force-x-lbs`, `body-force-y-lbs`, and
+`body-force-z-lbs` expose the body vector already cached by the native thruster
+evaluation. They are read-only for every thruster family. Reads do not call
+`GetBodyForces()` again or update moments. Existing acting-location properties
+remain structural inches; body axes are X forward, Y right, Z down.
+
+`aero/rp-body-x-ft`, `rp-body-y-ft`, and `rp-body-z-ft` expose the cached
+resolved aerodynamic reference point relative to CG, including the native
+reference-point shift. `forces/fbx-aero-rp-lbs` (and y/z) excludes functions
+marked `apply_at_cg`; `forces/fbx-aero-cg-lbs` (and y/z) reports that separate
+CG contribution. Their sum equals the existing aerodynamic total. Reset clears
+these caches consistently with the existing aerodynamic total. No force, moment,
+integration or allocation law changes. Existing applied-total observers include
+friction/contact and exclude gravity; separate native weight observations remain
+available, so a viewer can show their explicitly labeled vector sum.
+
+`TestForceObservations` covers distinct indexed/direct thruster directions,
+propeller access, cached-read immutability and a known shifted-RP/CG force split.
+The real-WASM test covers catalog permissions, batches and reset/reload lifetime.
+The wrapper release is `1.2.4-fork.10`. No upstream submission is made here.
+Any upstream review branch must contain only the native observations, necessary
+cache initialization, and focused native tests, excluding SDK metadata and
+downstream aircraft/UI work, under the linked contribution policy.

@@ -93,6 +93,14 @@ FGThruster::FGThruster(FGFDMExec *FDMExec, Element *el, int num ): FGForce(FDMEx
   PropertyManager->Tie(property_name.c_str(), (FGForce*)this, &FGForce::GetActingLocationY, &FGForce::SetActingLocationY);
   property_name = base_property_name + "/z-position";
   PropertyManager->Tie(property_name.c_str(), (FGForce*)this, &FGForce::GetActingLocationZ, &FGForce::SetActingLocationZ);
+  // Observe the body vector cached by the native propulsion evaluation.
+  // Do not call GetBodyForces() here: reading must not transform or update moments.
+  property_name = base_property_name + "/body-force-x-lbs";
+  PropertyManager->Tie(property_name.c_str(), (FGForce*)this, &FGForce::GetBodyXForce);
+  property_name = base_property_name + "/body-force-y-lbs";
+  PropertyManager->Tie(property_name.c_str(), (FGForce*)this, &FGForce::GetBodyYForce);
+  property_name = base_property_name + "/body-force-z-lbs";
+  PropertyManager->Tie(property_name.c_str(), (FGForce*)this, &FGForce::GetBodyZForce);
 
   element = thruster_element->FindElement("pointing");
   if (element)  {

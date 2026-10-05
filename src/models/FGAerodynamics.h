@@ -148,6 +148,18 @@ public:
       @return the force acting on an axis */
   double GetForces(int n) const {return vForces(n);}
 
+  /** Gets the cached aerodynamic force applied at the resolved reference point.
+      Body axes, lbs; excludes functions marked apply_at_cg. */
+  double GetForcesAtRP(int n) const { return vForces(n) - vForcesAtCG(n); }
+
+  /** Gets the cached aerodynamic force applied directly at the CG.
+      Body axes, lbs; only functions marked apply_at_cg. */
+  double GetForcesAtCG(int n) const { return vForcesAtCG(n); }
+
+  /** Gets the cached resolved aerodynamic reference point relative to the CG.
+      Body axes, feet; includes the native aero_ref_pt_shift function. */
+  double GetResolvedRP(int n) const { return vDXYZcg(n); }
+
   /** Gets the total aerodynamic moment vector about the CG.
       @return a moment vector reference. */
   const FGColumnVector3& GetMoments(void) const {return vMoments;}
