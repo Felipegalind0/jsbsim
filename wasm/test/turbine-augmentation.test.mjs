@@ -34,7 +34,10 @@ it("reads live boolean augmentation without writable commands, including spool l
     assert.notEqual(ordinaryThrottle, aircraft, "Fixture must have its native expanded throttle replaced");
     sdk.writeDataFile("aircraft/f16/f16.xml", ordinaryThrottle);
     assert.equal(sdk.loadModel("f16"), true);
-    assert.ok(sdk.getPropertyCatalog().some(line => /^propulsion\/engine(?:\[0\])?\/augmentation \(R\)$/.test(line)));
+    for (const property of ["augmentation", "nozzle-pos-norm"]) {
+      const observed = new RegExp(`^propulsion/engine(?:\\[0\\])?/${property} \\(R\\)$`);
+      assert.ok(sdk.getPropertyCatalog().some(line => observed.test(line)), property);
+    }
     sdk.setPropertyValue("ic/h-sl-ft", 5000);
     sdk.setPropertyValue("ic/vc-kts", 200);
     sdk.setPropertyValue("fcs/throttle-cmd-norm", 0);
@@ -42,7 +45,7 @@ it("reads live boolean augmentation without writable commands, including spool l
     sdk.setPropertyValue("propulsion/set-running", -1);
     assert.equal(sdk.runIc(), true);
     assert.equal(sdk.run(), true);
-    const batch = sdk.createPropertyBatch([engine + "augmentation", engine + "n2"]);
+    const batch = sdk.createPropertyBatch([engine + "augmentation", engine + "n2", engine + "nozzle-pos-norm"]);
     assert.deepEqual(batch.missing, []);
     sdk.setPropertyValue("fcs/throttle-cmd-norm", 1);
     assert.equal(sdk.run(), true);
@@ -51,6 +54,10 @@ it("reads live boolean augmentation without writable commands, including spool l
     for (let step = 0; step < 1200 && batch.read()[0] === 0; step++) assert.equal(sdk.run(), true);
     assert.equal(batch.read()[0], 1);
     assert.ok(batch.read()[1] > 97);
+    for (let step = 0; step < 180; step++) assert.equal(sdk.run(), true);
+    assert.equal(batch.read()[2], 1, "Native afterburning schedule opens the display nozzle");
+    sdk.setPropertyValue(engine + "nozzle-pos-norm", 0);
+    assert.equal(batch.read()[2], 1, "The nozzle observer is read-only");
     sdk.setPropertyValue(engine + "augmentation", 0);
     assert.equal(batch.read()[0], 1, "Read-only observation cannot disable a real afterburner");
     sdk.setPropertyValue("propulsion/cutoff_cmd", 1);
@@ -58,8 +65,10 @@ it("reads live boolean augmentation without writable commands, including spool l
     assert.equal(batch.read()[0], 0);
     sdk.resetToInitialConditions(0);
     assert.equal(batch.read()[0], 0);
+    assert.equal(batch.read()[2], 1);
     assert.equal(sdk.loadModel("f16"), true);
     assert.throws(() => batch.read(), /disposed/);
     assert.equal(sdk.getPropertyValue(engine + "augmentation"), 0);
+    assert.equal(sdk.getPropertyValue(engine + "nozzle-pos-norm"), 1);
   } finally { sdk.destroy(); }
 });

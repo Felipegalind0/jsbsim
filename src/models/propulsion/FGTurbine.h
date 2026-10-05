@@ -163,6 +163,9 @@ CLASS DOCUMENTATION
 
     Nozzle position, for variable area exhaust nozzles, is provided for users
     needing to drive a nozzle gauge or animate a virtual nozzle.
+    propulsion/engine[n]/nozzle-pos-norm is a read-only observation of this
+    existing generic display schedule (0 tight, 1 open), not calibrated area
+    or a nozzle command. Trim retains its previous value; Run slews it.
 
     propulsion/engine[n]/augmentation is a read-only boolean indicating that
     an installed afterburner is active, not a method-0 activation command.

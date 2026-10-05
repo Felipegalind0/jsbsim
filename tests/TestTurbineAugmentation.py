@@ -1,4 +1,4 @@
-"""Read-only actual afterburner state across turbine operating points."""
+"""Read-only actual afterburner and nozzle state across turbine operating points."""
 
 import copy
 import os
@@ -73,6 +73,62 @@ class TestTurbineAugmentation(JSBSimTestCase):
         self.assertEqual(fdm["propulsion/engine[1]/augmentation"], 0)
         fdm[ENGINE + "augmentation"] = 0
         self.assertEqual(fdm[ENGINE + "augmentation"], 1)
+
+    def test_nozzle_property_is_read_only_and_engine_indexed(self):
+        fdm = self.turbine(twin=True)
+        for index in (0, 1):
+            path = "propulsion/engine[%d]/nozzle-pos-norm" % index
+            node = fdm.get_property_manager().get_node(path, False)
+            self.assertIsNotNone(node)
+            self.assertTrue(node.get_attribute(jsbsim.Attribute.READ))
+            self.assertFalse(node.get_attribute(jsbsim.Attribute.WRITE))
+            self.assertEqual(fdm[path], 1)
+            fdm[path] = 0
+            self.assertEqual(fdm[path], 1)
+        fdm["propulsion/set-running"] = -1
+        self.throttle(fdm, 0.7)
+        fdm["fcs/throttle-cmd-norm[1]"] = 0.2
+        self.assertTrue(fdm.run_ic())
+        for _ in range(240):
+            self.assertTrue(fdm.run())
+        nozzle0 = fdm[ENGINE + "nozzle-pos-norm"]
+        nozzle1 = fdm["propulsion/engine[1]/nozzle-pos-norm"]
+        self.assertGreater(nozzle1, nozzle0)
+        for value in (nozzle0, nozzle1):
+            self.assertGreaterEqual(value, 0)
+            self.assertLessEqual(value, 1)
+        fdm[ENGINE + "nozzle-pos-norm"] = 1
+        self.assertEqual(fdm[ENGINE + "nozzle-pos-norm"], nozzle0)
+
+    def test_nozzle_tracks_native_dry_afterburning_shutdown_and_reset(self):
+        fdm = self.turbine()
+        fdm["propulsion/set-running"] = -1
+        self.throttle(fdm, 0.7)
+        self.assertTrue(fdm.run_ic())
+        for _ in range(240):
+            self.assertTrue(fdm.run())
+        dry_nozzle = fdm[ENGINE + "nozzle-pos-norm"]
+        self.assertLess(dry_nozzle, 0.5)
+        self.throttle(fdm, 1)
+        for _ in range(1200):
+            self.assertTrue(fdm.run())
+            if fdm[ENGINE + "augmentation"] == 1:
+                break
+        self.assertEqual(fdm[ENGINE + "augmentation"], 1)
+        for _ in range(180):
+            self.assertTrue(fdm.run())
+        self.assertEqual(fdm[ENGINE + "nozzle-pos-norm"], 1)
+        self.throttle(fdm, 0.7)
+        for _ in range(600):
+            self.assertTrue(fdm.run())
+        self.assertLess(fdm[ENGINE + "nozzle-pos-norm"], 0.5)
+        fdm["propulsion/cutoff_cmd"] = 1
+        for _ in range(180):
+            self.assertTrue(fdm.run())
+        self.assertEqual(fdm[ENGINE + "augmentation"], 0)
+        self.assertEqual(fdm[ENGINE + "nozzle-pos-norm"], 1)
+        fdm.reset_to_initial_conditions(0)
+        self.assertEqual(fdm[ENGINE + "nozzle-pos-norm"], 1)
 
     def test_method_one_waits_for_native_spool_threshold(self):
         fdm = self.turbine()

@@ -229,3 +229,22 @@ An upstream review branch must contain only the observer, native regression and
 necessary installation-flag correction, excluding the fork's SDK version,
 build parallelism policy and aircraft data. No commit or package proves F135
 acoustic or flight-model fidelity.
+
+## Turbine nozzle display observation — 2026-10-05
+
+`propulsion/engine[n]/nozzle-pos-norm` binds the existing `GetNozzle()` as a
+read-only indexed property. It reports the native display schedule: nominal
+0 is tight and 1 is open. `Run()` slews toward the dry operating-point target
+`1 - N2norm` or toward 1 during afterburning; `Off()` opens it, and reset starts
+at 1. Zero-time `Trim()` retains its previous value. No thrust, fuel, nozzle
+command, vectoring angle or schedule changes accompany this binding. It is a
+generic turbine animation value, not a calibrated F135 nozzle area.
+
+Two added `TestTurbineAugmentation` cases exercise read-only access, distinct
+engine indices, dry/afterburning motion, shutdown and reset. The real-WASM
+regression also verifies property-catalog access, batch reads, attempted writes
+and reset/reload lifetime. The wrapper release is `1.2.4-fork.9`; build and
+package acceptance are separate from native tests. No upstream submission is
+made here. Any upstream review branch must contain only the native observer,
+its header documentation and focused native regression, excluding SDK version
+metadata and downstream aircraft data, under the linked contribution policy.

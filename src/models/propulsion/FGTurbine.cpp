@@ -619,6 +619,8 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
   PropertyManager->Tie( property_name.c_str(), &N2);
   property_name = base_property_name + "/augmentation";
   PropertyManager->Tie(property_name.c_str(), this, &FGTurbine::GetAugmentationActive);
+  property_name = base_property_name + "/nozzle-pos-norm";
+  PropertyManager->Tie(property_name.c_str(), this, &FGTurbine::GetNozzle);
   property_name = base_property_name + "/injection_cmd";
   PropertyManager->Tie( property_name.c_str(), this,
                         &FGTurbine::GetInjection, &FGTurbine::SetInjection);
