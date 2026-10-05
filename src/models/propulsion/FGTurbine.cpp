@@ -354,6 +354,11 @@ double FGTurbine::Seize(void)
 
 double FGTurbine::Trim()
 {
+    // Zero-time initialization also evaluates stopped engines. Their throttle
+    // describes no running operating point: retain spool/fuel state, but do not
+    // manufacture steady dry or augmented thrust while the engine is off.
+    if (!Running) return 0.0;
+
     double idlethrust = MilThrust * IdleThrustLookup->GetValue();
     double milthrust = (MilThrust - idlethrust) * MilThrustLookup->GetValue();
     double steadyN2 = IdleN2 + ThrottlePos * N2_factor;

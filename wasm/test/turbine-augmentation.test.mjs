@@ -42,6 +42,7 @@ it("reads live boolean augmentation without writable commands, including spool l
     sdk.setPropertyValue("ic/vc-kts", 200);
     sdk.setPropertyValue("fcs/throttle-cmd-norm", 0);
     assert.equal(sdk.runIc(), true);
+    assert.equal(sdk.getPropertyValue(engine + "thrust-lbs"), 0, "Cold RunIC supplies no engine thrust");
     sdk.setPropertyValue("propulsion/set-running", -1);
     assert.equal(sdk.runIc(), true);
     assert.equal(sdk.run(), true);
@@ -63,6 +64,11 @@ it("reads live boolean augmentation without writable commands, including spool l
     sdk.setPropertyValue("propulsion/cutoff_cmd", 1);
     assert.equal(sdk.run(), true);
     assert.equal(batch.read()[0], 0);
+    const stopped = ["n1", "n2", "fuel-flow-rate-pps"].map(property => sdk.getPropertyValue(engine + property));
+    assert.equal(sdk.getPropertyValue(engine + "thrust-lbs"), 0);
+    assert.equal(sdk.runIc(), true);
+    assert.equal(sdk.getPropertyValue(engine + "thrust-lbs"), 0, "Stopped RunIC does not resurrect dry thrust");
+    assert.deepEqual(["n1", "n2", "fuel-flow-rate-pps"].map(property => sdk.getPropertyValue(engine + property)), stopped);
     sdk.resetToInitialConditions(0);
     assert.equal(batch.read()[0], 0);
     assert.equal(batch.read()[2], 1);

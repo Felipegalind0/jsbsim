@@ -204,5 +204,38 @@ class TestTurbineAugmentation(JSBSimTestCase):
         self.assertTrue(fdm.run())
         self.assertEqual(fdm[ENGINE + "augmentation"], 0)
 
+    def test_off_engine_zero_time_evaluation_has_no_thrust(self):
+        for method in (0, 1, 2):
+            with self.subTest(method=method):
+                fdm = self.turbine(method=method)
+                self.throttle(fdm, 1)
+                before = [fdm[ENGINE + name] for name in ("n1", "n2", "fuel-flow-rate-pps")]
+                for _ in range(2):
+                    self.assertTrue(fdm.run_ic())
+                    self.assertEqual(fdm[ENGINE + "set-running"], 0)
+                    self.assertEqual(fdm[ENGINE + "thrust-lbs"], 0)
+                    self.assertEqual(fdm[ENGINE + "augmentation"], 0)
+                    self.assertEqual([fdm[ENGINE + name] for name in ("n1", "n2", "fuel-flow-rate-pps")], before)
+                fdm["propulsion/set-running"] = -1
+                self.throttle(fdm, 0)
+                self.assertTrue(fdm.run_ic())
+                self.assertEqual(fdm[ENGINE + "set-running"], 1)
+                self.assertGreater(fdm[ENGINE + "thrust-lbs"], 0)
+                self.throttle(fdm, 1)
+                self.assertTrue(fdm.run_ic())
+                self.assertGreater(fdm[ENGINE + "thrust-lbs"], 1000)
+                self.assertTrue(fdm.run())  # Leave native Trim before commanding cutoff.
+                fdm["propulsion/cutoff_cmd"] = 1
+                self.assertTrue(fdm.run())
+                self.assertEqual(fdm[ENGINE + "set-running"], 0)
+                self.assertEqual(fdm[ENGINE + "thrust-lbs"], 0)
+                before = [fdm[ENGINE + name] for name in ("n1", "n2", "fuel-flow-rate-pps")]
+                for _ in range(2):
+                    self.assertTrue(fdm.run_ic())
+                    self.assertEqual(fdm[ENGINE + "thrust-lbs"], 0)
+                    self.assertEqual(fdm[ENGINE + "augmentation"], 0)
+                    self.assertEqual([fdm[ENGINE + name] for name in ("n1", "n2", "fuel-flow-rate-pps")], before)
+                del fdm
+
 
 RunTest(TestTurbineAugmentation)

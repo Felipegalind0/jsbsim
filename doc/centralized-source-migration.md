@@ -274,3 +274,23 @@ The wrapper release is `1.2.4-fork.10`. No upstream submission is made here.
 Any upstream review branch must contain only the native observations, necessary
 cache initialization, and focused native tests, excluding SDK metadata and
 downstream aircraft/UI work, under the linked contribution policy.
+
+## Stopped-turbine zero-time thrust — 2026-10-05
+
+`FGTurbine::Trim()` is also visited by `RunIC()` when a turbine is stopped.
+It previously retained stopped spool/fuel state but still returned a steady dry
+or augmented thrust calculated from the throttle demand. After an accepted
+cutoff step removed all thrust, another zero-time evaluation could therefore
+resurrect it. Trim now returns zero immediately when native `Running` is false.
+It retains existing spool/fuel state, legacy augmentation commands and the
+actual-augmentation latch cleared by `Calculate()`. Running idle/start-complete
+and ordinary running trim retain their prior operating-point behavior.
+
+The new native regression exercises cold and hot-stopped engines for all three
+augmentation methods, repeated zero-time evaluations, native running idle and
+unchanged stopped spool/fuel observations. The real-WASM regression also covers
+cold and hot-stopped `RunIC()`. The wrapper release is `1.2.4-fork.11`; the
+earlier force-observer package remains immutable. No upstream submission is made
+here. A review branch must contain only the stopped-thrust repair and focused
+native regression, excluding SDK metadata and aircraft allocation changes, under
+the linked contribution policy.
