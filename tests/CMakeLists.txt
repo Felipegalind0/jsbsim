@@ -35,6 +35,7 @@ set(PYTHON_TESTS ResetOutputFiles
                  TestEngineIndexedProps
                  TestExternalReactions
                  TestTurbine
+                 TestTurbineAugmentation
                  TestTurbineTrimSpool
                  TestTurbineTrimFuelFlow
                  TestTurbineIdleFuelFlow

@@ -192,3 +192,40 @@ post-fix summary are retained in
 change are the durable reproduction contract. SDK rebuilding and WASM
 verification must use a newly pinned native commit containing this fix before
 claiming that the WASM failure is resolved.
+
+## Turbine afterburner observation — 2026-10-05
+
+`propulsion/engine[n]/augmentation` is a read-only boolean, exposed as numeric
+0/1 through the property APIs. It reports whether an installed afterburner
+contributed thrust in the last operating-point evaluation. It is reset on every
+calculation and initial-condition reset, and set in the actual afterburning
+thrust branches of `Run()` and `Trim()` only for a running engine. Startup,
+stall, seizure and shutdown therefore report false. The existing method-0
+`GetAugmentation()`/`SetAugmentation()` C++ command contract is retained; the
+property binds the separate `GetAugmentationActive()` output. Audio and gauges
+need not infer combustion mode from throttle commands or fuel flow.
+
+Both integrated and zero-time method-2 evaluation now ignore augmentation
+commands when `<augmented>` is zero. Method-1 activation also respects that
+installation flag. Configured afterburning engines retain their thrust and
+fuel schedules; no aircraft-specific F135 performance map is introduced.
+
+`TestTurbineAugmentation` covers read-only indexed properties, method-1 spool
+lag, both throttle methods through zero-time evaluation, cutoff/reset,
+unaugmented turbines, stall and seizure. The five cases passed with the six
+existing turbine, engine-indexing and model-reload CTest targets. The causal
+pre-change fixture cannot find the observation property. Native logs stay in
+the local `build/checks/augmentation-20261005/` tree; they are not distributed.
+`wasm/test/turbine-augmentation.test.mjs` checks the same signal through a real
+SDK property batch, including read-only writes, reset and model replacement.
+The release build runs that regression with its own compiled native sources.
+
+This is the scoped native observer candidate for wrapper version
+`1.2.4-fork.8`. Readiness is native-checked with real-WASM/package acceptance
+pending; upstream state is not submitted and downstream adoption is pending.
+The fork's contribution policy remains
+[`0SFS contribution policy`](../../../0sfs/docs/jsbsim-upstream-contribution-policy.md).
+An upstream review branch must contain only the observer, native regression and
+necessary installation-flag correction, excluding the fork's SDK version,
+build parallelism policy and aircraft data. No commit or package proves F135
+acoustic or flight-model fidelity.

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 import { contentManifest, gitIdentity, manifestSha256, nativeInputRoots, readDescriptor, verifyContent, verifyGeneratedBindings, verifyWorkspaceInputs } from "./build-system/source.mjs";
 
@@ -32,8 +33,9 @@ const env = { ...process.env, JSBSIM_BUILD_DESCRIPTOR: candidate.descriptor, JSB
 const extra = process.argv.slice(3);
 const command = operation === "typecheck" ? path.join(descriptor.workspaceRoot, "node_modules/.bin/tsc") : process.execPath;
 const defaultTests = (await readdir(path.join(descriptor.workspaceRoot, "test"))).filter(name => name.endsWith(".test.mjs")).sort().map(name => "test/" + name);
+const concurrency = Math.max(1, Math.floor(availableParallelism() / 2));
 const args = operation === "typecheck" ? ["--noEmit", ...extra] :
-  operation === "bench" ? ["bench/property-batch.mjs", ...extra] : ["--test", ...(extra.length ? extra : defaultTests)];
+  operation === "bench" ? ["bench/property-batch.mjs", ...extra] : ["--test", `--test-concurrency=${concurrency}`, ...(extra.length ? extra : defaultTests)];
 const result = spawnSync(command, args, { cwd: descriptor.workspaceRoot, env, stdio: "inherit" });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;

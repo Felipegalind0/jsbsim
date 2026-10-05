@@ -97,6 +97,7 @@ void FGTurbine::ResetToIC(void)
   AugmentCmd = InjWaterNorm = 0.0;
   InletPosition = NozzlePosition = 1.0;
   Stalled = Seized = Overtemp = Fire = Augmentation = Injection = Reversed = false;
+  AugmentationActive = false;
   Cutoff = true;
   phase = tpOff;
   EGT_degC = in.TAT_c;
@@ -110,6 +111,7 @@ void FGTurbine::ResetToIC(void)
 void FGTurbine::Calculate(void)
 {
   double thrust;
+  AugmentationActive = false;
 
   RunPreFunctions();
 
@@ -233,19 +235,21 @@ double FGTurbine::Run()
   }
 
   if (AugMethod == 1) {
-    if ((ThrottlePos > 0.99) && (N2 > 97.0)) {Augmentation = true;}
+    if ((Augmented == 1) && (ThrottlePos > 0.99) && (N2 > 97.0)) {Augmentation = true;}
     else {Augmentation = false;}
   }
 
   if ((Augmented == 1) && Augmentation && (AugMethod < 2)) {
+    AugmentationActive = true;
     thrust = MaxThrustLookup->GetValue() * MaxThrust;
     FuelFlow_pph = Seek(&FuelFlow_pph, thrust * ATSFC->GetValue(), 5000.0, 10000.0);
     NozzlePosition = Seek(&NozzlePosition, 1.0, 0.8, 0.8);
   }
 
   if (AugMethod == 2) {
-    if (AugmentCmd > 0.0) {
+    if ((Augmented == 1) && (AugmentCmd > 0.0)) {
       Augmentation = true;
+      AugmentationActive = true;
       double tdiff = (MaxThrust * MaxThrustLookup->GetValue()) - thrust;
       thrust += (tdiff * std::min(AugmentCmd, 1.0));
       FuelFlow_pph = Seek(&FuelFlow_pph, thrust * ATSFC->GetValue(), 5000.0, 10000.0);
@@ -384,12 +388,14 @@ double FGTurbine::Trim()
     }
 
     if ((Augmented == 1) && Augmentation && (AugMethod < 2)) {
+      AugmentationActive = Running;
       thrust = MaxThrust * MaxThrustLookup->GetValue();
       if (Running) FuelFlow_pph = thrust * ATSFC->GetValue();
     }
 
-    if (AugMethod == 2) {
+    if ((AugMethod == 2) && (Augmented == 1)) {
       if (AugmentCmd > 0.0) {
+        AugmentationActive = Running;
         double tdiff = (MaxThrust * MaxThrustLookup->GetValue()) - thrust;
         thrust += (tdiff * std::min(AugmentCmd, 1.0));
         if (Running) FuelFlow_pph = thrust * ATSFC->GetValue();
@@ -611,6 +617,8 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
   PropertyManager->Tie( property_name.c_str(), &N1);
   property_name = base_property_name + "/n2";
   PropertyManager->Tie( property_name.c_str(), &N2);
+  property_name = base_property_name + "/augmentation";
+  PropertyManager->Tie(property_name.c_str(), this, &FGTurbine::GetAugmentationActive);
   property_name = base_property_name + "/injection_cmd";
   PropertyManager->Tie( property_name.c_str(), this,
                         &FGTurbine::GetInjection, &FGTurbine::SetInjection);

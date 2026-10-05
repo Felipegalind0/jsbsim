@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 import { buildInputSha256, captureRepository, contentManifest, copyManifest, generatedBuildIdentity, sha256, verifyContent, verifyGeneratedBindings, verifyWorkspaceInputs, writeJson } from "./build-system/source.mjs";
 
@@ -175,8 +176,9 @@ async function build(options) {
   run(path.join(cwd, "node_modules", ".bin", "tsc"), ["--noEmit"]);
   commands.push("tsc --noEmit (frozen SDK workspace)");
   const testFiles = (await readdir(path.join(cwd, "test"))).filter(name => name.endsWith(".test.mjs")).sort();
-  run(process.execPath, ["--test", ...testFiles.map(name => "test/" + name)]);
-  commands.push("node --test test/*.test.mjs (frozen SDK workspace and resolved native fixtures)");
+  const concurrency = Math.max(1, Math.floor(availableParallelism() / 2));
+  run(process.execPath, ["--test", `--test-concurrency=${concurrency}`, ...testFiles.map(name => "test/" + name)]);
+  commands.push(`node --test --test-concurrency=${concurrency} test/*.test.mjs (frozen SDK workspace and resolved native fixtures)`);
   await finalize(descriptor, commands);
 }
 

@@ -138,7 +138,7 @@ CLASS DOCUMENTATION
               0 = afterburner not installed
               1 = afterburner installed
   augmethod
-              0 = afterburner activated by property /engines/engine[n]/augmentation
+              0 = afterburner commanded through SetAugmentation()
               1 = afterburner activated by pushing throttle above 99% position
               2 = throttle range is expanded in the FCS, and values above 1.0 are afterburner range
   injected
@@ -163,6 +163,9 @@ CLASS DOCUMENTATION
 
     Nozzle position, for variable area exhaust nozzles, is provided for users
     needing to drive a nozzle gauge or animate a virtual nozzle.
+
+    propulsion/engine[n]/augmentation is a read-only boolean indicating that
+    an installed afterburner is active, not a method-0 activation command.
 
     This model can only be used with the "direct" thruster.  See the file:
     /engine/direct.xml
@@ -202,6 +205,9 @@ public:
   bool GetInjection(void) const {return Injection;}
   bool GetFire(void) const { return Fire; }
   bool GetAugmentation(void) const {return Augmentation;}
+  /** Whether an installed afterburner contributes thrust at the evaluated
+      operating point. Unlike GetAugmentation(), this is not a command. */
+  bool GetAugmentationActive(void) const {return AugmentationActive;}
   bool GetReversed(void) const { return Reversed; }
   bool GetCutoff(void) const { return Cutoff; }
   int GetIgnition(void) const {return Ignition;}
@@ -278,6 +284,7 @@ private:
   bool Fire;               ///< true if engine fire detected
   bool Injection;
   bool Augmentation;
+  bool AugmentationActive;
   bool Reversed;
   bool Cutoff;
   bool disableWindmill;    ///< flag to disable windmilling of engine in Off phase

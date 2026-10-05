@@ -28,6 +28,12 @@ npm to fill a missing dependency cache; builds otherwise install dependencies
 from the existing offline cache. Source is always the enclosing checkout.
 Neither command selects, downloads or patches another native source tree.
 
+WASM compilation defaults to half the host's available parallelism, with at
+least one and at most eight jobs. `JSBSIM_BUILD_JOBS` accepts a positive integer
+to set the compilation job count explicitly.
+The SDK build's mandatory tests and `npm test` rechecks also default to half
+the available parallelism, with at least one worker.
+
 A build captures tracked and nonignored files from the enclosing Git repository
 once, checking Git identity and file content before and after copying. The SDK
 manifest is the `wasm/` subset of that same snapshot. Captures contain no `.git`
@@ -80,7 +86,7 @@ imported without squashing at `d8a6453c082c133219f47e75ffc18ade71749575`.
 Its imported tree is byte-identical to SDK tree
 `1a441ec3d271e302959c8ec7aa23ce8f352f9f45`. The in-tree migration retains the SDK's
 MIT notice and 0x62's authorship, alongside native JSBSim and third-party notices.
-The package scope remains `@felipegalind0/jsbsim`; version `1.2.4-fork.7`
+The package scope remains `@felipegalind0/jsbsim`; version `1.2.4-fork.8`
 identifies this wrapper package, while the native version/revision is separate.
 
 The old engine archive/lock, generated editor previews, old release binaries and
