@@ -622,6 +622,8 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
   PropertyManager->Tie( property_name.c_str(), &N1);
   property_name = base_property_name + "/n2";
   PropertyManager->Tie( property_name.c_str(), &N2);
+  property_name = base_property_name + "/egt-degc";
+  PropertyManager->Tie(property_name.c_str(), this, &FGTurbine::GetEGT);
   property_name = base_property_name + "/augmentation";
   PropertyManager->Tie(property_name.c_str(), this, &FGTurbine::GetAugmentationActive);
   property_name = base_property_name + "/nozzle-pos-norm";

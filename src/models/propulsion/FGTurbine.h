@@ -170,6 +170,12 @@ CLASS DOCUMENTATION
     propulsion/engine[n]/augmentation is a read-only boolean indicating that
     an installed afterburner is active, not a method-0 activation command.
 
+    propulsion/engine[n]/egt-degc is a read-only observation of the existing
+    exhaust-gas temperature estimate in degrees Celsius. It is not a metal
+    temperature or a calibrated afterburner/nozzle-exit temperature. Run uses
+    the generic N2 schedule; augmentation does not alter that schedule. Start
+    and Off seek their existing targets, while Trim retains the last value.
+
     This model can only be used with the "direct" thruster.  See the file:
     /engine/direct.xml
 </pre>
