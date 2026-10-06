@@ -150,6 +150,15 @@ CLASS DOCUMENTATION
   disable-windmill - flag that disables engine windmilling when off if true
 </pre>
 
+<h3>Optional thermal observer:</h3>
+    A &lt;thermal&gt; block enables separate nozzle-gas and persistent wall
+    temperatures in Kelvin, without feedback into thrust or fuel calculations.
+    It requires explicit SI flow, heat capacity, conductance and radiation data.
+    Each field accepts a literal or an unnamed &lt;function&gt;. See
+    doc/turbine-thermal-model.md for fields, equations, properties and lifecycle.
+    The native EGT schedule remains unchanged. Thermal estimates are not
+    calibrated engine station or material temperatures without suitable data.
+
 <h3>NOTES:</h3>
 <pre>
     Bypass ratio is used only to estimate engine acceleration time.  The
@@ -228,6 +237,14 @@ public:
   double GetN2(void) const {return N2;}
   double GetEPR(void) const {return EPR;}
   double GetEGT(void) const {return EGT_degC;}
+  double GetNozzleGasTemperatureK(void) const {return ThermalGasK;}
+  double GetMetalTemperatureK(void) const {return ThermalMetalK;}
+  double GetAfterburnerFuelFlowKgSec(void) const {return ThermalABFuelKgSec;}
+  double GetAfterburnerBurnedFuelFlowKgSec(void) const {return ThermalABBurnedFuelKgSec;}
+  bool GetThermalInitialized(void) const {return ThermalInitialized;}
+  bool GetThermalValid(void) const {return ThermalValid;}
+  /** Explicit state restoration, not an engine control or display temperature. */
+  void SetMetalTemperatureStateK(double temperature);
 
   double GetMaxN1(void) const {return MaxN1;}
   double GetMaxN2(void) const {return MaxN2;}
@@ -311,6 +328,23 @@ private:
   double InletPosition;
   double NozzlePosition;
   double correctedTSFC;
+  struct ThermalParameters {
+    std::shared_ptr<FGParameter> gasFlow, gasCp, fuelHeat, efficiency;
+    std::shared_ptr<FGParameter> capacity, gasConductance, coolantConductance;
+    std::shared_ptr<FGParameter> area, emissivity;
+    std::shared_ptr<FGParameter> baseGasK, coolantK, surroundingsK, initialMetalK;
+    std::shared_ptr<FGParameter> flameArea, flameEmissivity;
+    std::shared_ptr<FGParameter> stoichiometricRatio;
+  };
+  std::unique_ptr<ThermalParameters> Thermal;
+  double ThermalGasK = 0.0;
+  double ThermalMetalK = 0.0;
+  double ThermalABFuelKgSec = 0.0;
+  double ThermalABBurnedFuelKgSec = 0.0;
+  double ThermalDryFuelPph = 0.0;
+  bool ThermalInitialized = false;
+  bool ThermalValid = false;
+  bool ThermalWarmPending = false;
   double InjectionTimer;
   double InjectionTime;
   double InjWaterNorm;
@@ -336,6 +370,8 @@ private:
   std::shared_ptr<FGParameter> N2SpoolDown;
 
   bool Load(FGFDMExec *exec, Element *el);
+  void LoadThermal(FGFDMExec* exec, Element* el);
+  void UpdateThermal(void);
   void bindmodel(FGPropertyManager* pm);
   void Debug(int from);
 

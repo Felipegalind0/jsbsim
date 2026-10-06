@@ -40,12 +40,15 @@ INCLUDES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
 #include "FGFDMExec.h"
 #include "math/FGFunction.h"
 #include "math/FGRealValue.h"
+#include "math/FGParameterValue.h"
 #include "FGTurbine.h"
 #include "FGThruster.h"
 #include "input_output/FGXMLElement.h"
@@ -102,6 +105,10 @@ void FGTurbine::ResetToIC(void)
   phase = tpOff;
   EGT_degC = in.TAT_c;
   OilTemp_degK = in.TAT_c + 273.0;
+  ThermalMetalK = ThermalGasK = in.TAT_c + 273.15;
+  ThermalABFuelKgSec = ThermalDryFuelPph = 0.0;
+  ThermalABBurnedFuelKgSec = 0.0;
+  ThermalInitialized = ThermalValid = ThermalWarmPending = false;
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -112,6 +119,7 @@ void FGTurbine::Calculate(void)
 {
   double thrust;
   AugmentationActive = false;
+  ThermalDryFuelPph = 0.0;
 
   RunPreFunctions();
 
@@ -170,6 +178,8 @@ void FGTurbine::Calculate(void)
   LoadThrusterInputs();
   Thruster->Calculate(thrust); // allow thruster to modify thrust (i.e. reversing)
 
+  if (Thermal) UpdateThermal();
+
   RunPostFunctions();
 }
 
@@ -225,14 +235,24 @@ double FGTurbine::Run()
   OilPressure_psi = N2 * 0.62;
   OilTemp_degK = Seek(&OilTemp_degK, 366.0, 1.2, 0.1);
 
+  const double dryThrust = thrust;
+  double dryTSFC = correctedTSFC;
   if (!Augmentation) {
     correctedTSFC = TSFC->GetValue();
+    dryTSFC = correctedTSFC;
     FuelFlow_pph = Seek(&FuelFlow_pph, thrust * correctedTSFC, 1000.0, 10000.0);
     if (FuelFlow_pph < IdleFF) FuelFlow_pph = IdleFF;
     NozzlePosition = Seek(&NozzlePosition, 1.0 - N2norm, 0.8, 0.8);
     thrust = thrust * (1.0 - BleedDemand);
     EPR = 1.0 + thrust/MilThrust;
+  } else if (Thermal) {
+    // The optional thermal partition needs the same unaugmented fuel demand
+    // at this operating point. It never writes back to thrust or fuel state.
+    dryTSFC = TSFC->GetValue();
   }
+  if (Thermal) ThermalDryFuelPph = std::isfinite(dryTSFC) && dryTSFC >= 0.0
+    ? std::max(IdleFF, dryThrust * dryTSFC)
+    : std::numeric_limits<double>::quiet_NaN();
 
   if (AugMethod == 1) {
     if ((Augmented == 1) && (ThrottlePos > 0.99) && (N2 > 97.0)) {Augmentation = true;}
@@ -385,6 +405,7 @@ double FGTurbine::Trim()
     if (Running) {
       correctedTSFC = TSFC->GetValue();
       FuelFlow_pph = std::max(IdleFF, dryThrust * correctedTSFC);
+      if (Thermal) ThermalDryFuelPph = FuelFlow_pph;
     }
 
     if (AugMethod == 1) {
@@ -449,8 +470,200 @@ double FGTurbine::Seek(double *var, double target, double accel, double decel) {
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+void FGTurbine::LoadThermal(FGFDMExec* exec, Element* el)
+{
+  Element* block = el->FindElement("thermal");
+  if (!block) return;
+  auto parameters = std::make_unique<ThermalParameters>();
+  auto read = [&](const char* name, bool required, bool positive,
+                  bool fraction = false) -> std::shared_ptr<FGParameter> {
+    Element* field = block->FindElement(name);
+    if (!field) {
+      if (!required) return nullptr;
+      XMLLogException err(block);
+      err << "<thermal> requires <" << name << "> in the SI units named by its tag.\n";
+      throw err;
+    }
+    std::shared_ptr<FGParameter> parameter;
+    if (Element* function = field->FindElement("function")) {
+      if (!function->GetAttributeValue("name").empty()) {
+        XMLLogException err(function);
+        err << "Thermal parameter functions must be unnamed.\n";
+        throw err;
+      }
+      parameter = std::make_shared<FGFunction>(exec, function,
+                                               std::to_string(EngineNumber));
+    } else {
+      parameter = std::make_shared<FGParameterValue>(field, exec->GetPropertyManager());
+    }
+    if (parameter->IsConstant()) {
+      double value = parameter->GetValue();
+      if (!std::isfinite(value) || (positive ? value <= 0.0 : value < 0.0)
+          || (fraction && value > 1.0)) {
+        XMLLogException err(field);
+        err << "Invalid <" << name << ">: require finite "
+            << (positive ? "positive" : "nonnegative")
+            << (fraction ? " value no greater than one" : " SI value") << ".\n";
+        throw err;
+      }
+    }
+    return parameter;
+  };
+  parameters->gasFlow = read("gas-mass-flow-kg-sec", true, false);
+  parameters->gasCp = read("gas-specific-heat-j-kg-k", true, true);
+  parameters->fuelHeat = read("fuel-heating-value-j-kg", true, true);
+  parameters->efficiency = read("afterburner-efficiency", true, false, true);
+  parameters->capacity = read("wall-heat-capacity-j-k", true, true);
+  parameters->gasConductance = read("gas-conductance-w-k", true, false);
+  parameters->coolantConductance = read("coolant-conductance-w-k", true, false);
+  parameters->area = read("radiation-area-sq-m", true, false);
+  parameters->emissivity = read("emissivity", true, false, true);
+  parameters->baseGasK = read("base-gas-temperature-k", false, true);
+  parameters->coolantK = read("coolant-temperature-k", false, true);
+  parameters->surroundingsK = read("surroundings-temperature-k", false, true);
+  parameters->initialMetalK = read("initial-metal-temperature-k", false, true);
+  parameters->flameArea = read("flame-radiation-area-sq-m", false, false);
+  parameters->flameEmissivity = read("flame-emissivity", false, false, true);
+  parameters->stoichiometricRatio = read("stoichiometric-fuel-air-ratio", false, true);
+  Thermal = std::move(parameters);
+}
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+void FGTurbine::SetMetalTemperatureStateK(double temperature)
+{
+  if (!Thermal || !std::isfinite(temperature) || temperature <= 0.0) return;
+  ThermalMetalK = temperature;
+  ThermalInitialized = true;
+  ThermalWarmPending = false;
+}
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+void FGTurbine::UpdateThermal(void)
+{
+  const double ambientK = in.TAT_c + 273.15;
+  const auto& p = *Thermal;
+  const auto value = [](const std::shared_ptr<FGParameter>& parameter, double fallback) {
+    return parameter ? parameter->GetValue() : fallback;
+  };
+  const double gasFlow = p.gasFlow->GetValue();
+  const double cp = p.gasCp->GetValue();
+  const double heat = p.fuelHeat->GetValue();
+  const double efficiency = p.efficiency->GetValue();
+  const double capacity = p.capacity->GetValue();
+  const double hg = p.gasConductance->GetValue();
+  const double hc = p.coolantConductance->GetValue();
+  const double area = p.area->GetValue();
+  const double emissivity = p.emissivity->GetValue();
+  const double baseK = value(p.baseGasK, EGT_degC + 273.15);
+  const double coolantK = value(p.coolantK, ambientK);
+  const double surroundingsK = value(p.surroundingsK, ambientK);
+  const double flameArea = value(p.flameArea, 0.0);
+  const double flameEmissivity = value(p.flameEmissivity, 0.0);
+  const double stoichiometricRatio = value(p.stoichiometricRatio, 0.0);
+  const auto nonnegative = [](double v) { return std::isfinite(v) && v >= 0.0; };
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  ThermalValid = nonnegative(gasFlow) && positive(cp) && positive(heat)
+    && nonnegative(efficiency) && efficiency <= 1.0 && positive(capacity)
+    && nonnegative(hg) && nonnegative(hc) && nonnegative(area)
+    && nonnegative(emissivity) && emissivity <= 1.0 && positive(baseK)
+    && positive(coolantK) && positive(surroundingsK) && positive(ThermalMetalK)
+    && nonnegative(flameArea) && nonnegative(flameEmissivity) && flameEmissivity <= 1.0
+    && (!p.stoichiometricRatio || positive(stoichiometricRatio));
+  ThermalABFuelKgSec = ThermalABBurnedFuelKgSec = 0.0;
+  if (AugmentationActive && ThermalValid) {
+    // FuelFlow_pph is current private native fuel. CalcFuelNeed refreshes the
+    // public PPS observer later in FGPropulsion::ConsumeFuel.
+    ThermalValid = nonnegative(FuelFlow_pph) && nonnegative(ThermalDryFuelPph)
+      && gasFlow > 0.0;
+    if (ThermalValid) {
+      constexpr double pphToKgSec = 0.45359237 / 3600.0;
+      const double totalFuelKgSec = FuelFlow_pph * pphToKgSec;
+      ThermalABFuelKgSec = std::max(0.0, FuelFlow_pph - ThermalDryFuelPph) * pphToKgSec;
+      ThermalABBurnedFuelKgSec = ThermalABFuelKgSec;
+      if (p.stoichiometricRatio) {
+        const double coreFuelKgSec = totalFuelKgSec - ThermalABFuelKgSec;
+        const double airKgSec = std::max(0.0, gasFlow - coreFuelKgSec);
+        const double remainingCapacity = std::max(0.0,
+          airKgSec * stoichiometricRatio - coreFuelKgSec);
+        ThermalABBurnedFuelKgSec = std::min(ThermalABFuelKgSec, remainingCapacity);
+      }
+    }
+  }
+  if (!ThermalValid) {
+    ThermalGasK = std::numeric_limits<double>::quiet_NaN();
+    return; // Preserve the last valid wall state; do not invent missing heat.
+  }
+  // Constant effective cp, enthalpy referenced to 298.15K; AB fuel sensible
+  // enthalpy is neglected. Added fuel mass belongs in the outlet denominator.
+  constexpr double referenceK = 298.15;
+  ThermalGasK = baseK;
+  if (gasFlow > 0.0 || ThermalABFuelKgSec > 0.0) {
+    ThermalGasK = referenceK + (gasFlow * cp * (baseK - referenceK)
+      + efficiency * ThermalABBurnedFuelKgSec * heat)
+      / ((gasFlow + ThermalABFuelKgSec) * cp);
+  }
+  if (!positive(ThermalGasK)) { ThermalValid = false; return; }
+
+  // Engine steady-state search uses an artificial dt=0.5 under TrimStatus.
+  // Neither it nor zero-time RunIC may age or initialize real thermal state.
+  const double dt = in.TotalDeltaT;
+  if (dt <= 0.0 || FDMExec->GetTrimStatus()) return;
+  if (!positive(dt)) { ThermalValid = false; return; }
+  const bool seedWarm = !ThermalInitialized && ThermalWarmPending;
+  // Initial conditions can change atmosphere after construction/ResetToIC.
+  // Seed a genuinely cold engine from its first accepted-step environment.
+  if (!ThermalInitialized && !ThermalWarmPending) {
+    if (!positive(ambientK)) { ThermalValid = false; return; }
+    ThermalMetalK = ambientK;
+  }
+  if (seedWarm && p.initialMetalK) {
+    const double initialK = p.initialMetalK->GetValue();
+    if (!positive(initialK)) { ThermalValid = false; return; }
+    SetMetalTemperatureStateK(initialK);
+    return;
+  }
+  constexpr double sigma = 5.670374419e-8; // W/(m^2 K^4), SI Stefan-Boltzmann constant.
+  const double radiative = sigma * area * emissivity;
+  // Effective incident gray radiation is explicit optional data, not an
+  // assumption that a transparent combustion gas is a blackbody.
+  const double flame = AugmentationActive ? sigma * flameArea * flameEmissivity : 0.0;
+  const double rate = seedWarm ? 0.0 : capacity / dt;
+  const auto fourth = [](double t) { double t2 = t * t; return t2 * t2; };
+  const auto residual = [&](double t) {
+    return rate * (t - ThermalMetalK) + hg * (t - ThermalGasK)
+      + hc * (t - coolantK) + radiative * (fourth(t) - fourth(surroundingsK))
+      + flame * (fourth(t) - fourth(ThermalGasK));
+  };
+  double low = std::min({ThermalMetalK, ThermalGasK, coolantK, surroundingsK});
+  double high = std::max({ThermalMetalK, ThermalGasK, coolantK, surroundingsK});
+  if (!nonnegative(rate) || !std::isfinite(residual(low)) || !std::isfinite(residual(high))) {
+    ThermalValid = false;
+    return;
+  }
+  if (rate + hg + hc + radiative + flame > 0.0) {
+    // Positive heat capacity/transfer give a monotone scalar backward-Euler
+    // equation. The bath/previous-state bracket prevents thermal overshoot.
+    for (int i = 0; i < 64; ++i) {
+      double middle = low + (high - low) * 0.5;
+      if (middle == low || middle == high) break;
+      if (residual(middle) > 0.0) high = middle;
+      else low = middle;
+    }
+    ThermalMetalK = low + (high - low) * 0.5;
+  }
+  ThermalInitialized = true;
+  ThermalWarmPending = false;
+}
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 bool FGTurbine::Load(FGFDMExec* exec, Element *el)
 {
+  // Parse and validate constants before engine properties are tied: a rejected
+  // model must not leave bindings to an engine that failed construction.
+  LoadThermal(exec, el);
   Element* function_element = el->FindElement("function");
 
   while(function_element) {
@@ -661,12 +874,33 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
   PropertyManager->Tie(property_name.c_str(), &correctedTSFC);
   auto node = PropertyManager->GetNode(property_name.c_str(), false);
   node->setAttribute(SGPropertyNode::WRITE, false);
+  if (Thermal) {
+    const string thermal = base_property_name + "/thermal/";
+    PropertyManager->Tie(thermal + "nozzle-gas-temperature-k", this,
+                         &FGTurbine::GetNozzleGasTemperatureK);
+    PropertyManager->Tie(thermal + "metal-temperature-k", this,
+                         &FGTurbine::GetMetalTemperatureK);
+    PropertyManager->Tie(thermal + "metal-temperature-state-k", this,
+                         &FGTurbine::GetMetalTemperatureK,
+                         &FGTurbine::SetMetalTemperatureStateK);
+    PropertyManager->Tie(thermal + "initialized", this,
+                         &FGTurbine::GetThermalInitialized);
+    PropertyManager->Tie(thermal + "valid", this, &FGTurbine::GetThermalValid);
+    PropertyManager->Tie(thermal + "afterburner-fuel-flow-kg-sec", this,
+                         &FGTurbine::GetAfterburnerFuelFlowKgSec);
+    PropertyManager->Tie(thermal + "afterburner-burned-fuel-flow-kg-sec", this,
+                         &FGTurbine::GetAfterburnerBurnedFuelFlowKgSec);
+  }
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 int FGTurbine::InitRunning(void)
 {
+  // This shortcut requests a warm initial operating point only before thermal
+  // evolution/restoration. Seed on the first real step, after final IC inputs;
+  // GetSteadyState's artificial trim dt must not age or initialize the wall.
+  if (Thermal && !ThermalInitialized) ThermalWarmPending = true;
   FDMExec->SuspendIntegration();
   Cutoff=false;
   Running=true;

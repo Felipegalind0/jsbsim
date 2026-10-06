@@ -56,6 +56,7 @@ FGEngine::FGEngine(int engine_number, struct Inputs& input)
   : in(input), EngineNumber(engine_number)
 {
   Type = etUnknown;
+  Thruster = nullptr; // A rejected configuration may unwind before LoadThruster.
   SLFuelFlowMax = 0.0;
   FuelExpended = 0.0;
   MaxThrottle = 1.0;
