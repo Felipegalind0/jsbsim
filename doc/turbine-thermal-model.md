@@ -137,10 +137,69 @@ each initialized solid independently; restoring one never initializes or
 reseeds another. The original properties still refer only to the original wall.
 Consumers should gate each solid by shared `valid` and its own `initialized`.
 
+## Signed local heat accounting
+
+Each solid publishes the following additional read-only fields under its existing
+prefix (`thermal/` for the original wall, `thermal/<name>/` for another region):
+
+| Field | Unit and meaning |
+| --- | --- |
+| `gas-bath-temperature-k`, `coolant-bath-temperature-k`, `surroundings-bath-temperature-k` | K, evaluated imposed bath inputs |
+| `heat-capacity-j-k` | J/K, effective capacity evaluated for this calculation |
+| `gas-heat-flow-w` | W, `Hg*(Tgas - Tsolid)` |
+| `coolant-heat-flow-w` | W, `Hc*(Tcoolant - Tsolid)` |
+| `surroundings-radiation-heat-flow-w` | W, `sigma*epsilon*A*(Tsur^4 - Tsolid^4)` |
+| `flame-radiation-heat-flow-w` | W, optional `sigma*epsilonFlame*AFlame*(Tgas^4 - Tsolid^4)` while actually augmented, otherwise zero |
+| `net-heat-flow-w` | W, sum of the four signed rates, positive into the solid |
+| `step-seconds` | s, interval integrated by this calculation, zero for initialization/non-integration |
+| `step-stored-energy-j` | J, `Cstep*(Tnew - Tprevious)` during a transient step |
+| `step-heat-transfer-j` | J, `step-seconds * net-heat-flow-w`, backward-Euler endpoint quadrature |
+| `step-energy-residual-j` | J, stored change minus integrated heat |
+| `initialization-energy-j` | J, externally assigned initial stored-energy change; never counted as integrated heat |
+| `heat-balance-valid` | True only for an accepted transient heat integration step |
+
+The four heat rates use the native solver's endpoint temperature and the same
+once-evaluated inputs used in that solve. They are not extra sources fed back
+into the solver. Dynamic coolant conductance is an effective heat-transfer term;
+no distinct inter-region conduction, coolant mass-flow state, fuel sensible heat,
+dissociation or finite gas-reservoir depletion is added by these diagnostics.
+
+Warm `InitRunning` first seeds equilibrium or a declared initial temperature.
+That potentially large change is external initial energy, not a simulated cold
+start. A genuinely cold first step can likewise refresh construction atmosphere;
+that refresh is recorded separately from subsequent integrated heat. Both keep
+existing initialization semantics. An explicit state restoration establishes a
+new initial condition and clears diagnostics, without creating a heat pulse.
+
+Non-integrating engine calculations publish instantaneous rates but zero step
+energy and false `heat-balance-valid`. Reads do not calculate or transfer heat.
+Executive hold may skip engine calculation entirely, leaving the last cached
+receipt visible: consumers must accumulate receipts only when native simulation
+time advances, never on repeated reads or renderer frames. Invalid inputs clear
+all diagnostic receipts and retain all physical solid temperatures atomically.
+
+For constant capacity, `C*(Tend - Tstart)` equals the sum of transient heat
+receipts up to the recorded numerical residual (plus separately assigned initial
+energy where applicable). When an engine supplies a dynamic capacity function,
+the model freezes its effective C once per step; it does not integrate a
+material-specific `C(T)` enthalpy law. The receipt is then the local discrete
+model's storage term, not proof of an exact temperature-dependent material energy
+function. F135's two declared capacities are constants.
+
+Gas/coolant/surroundings temperatures are prescribed reservoirs. Solid energy is
+not subtracted from their enthalpy or from native fuel consumption. The optional
+AB gas energy estimate remains independent. Thus these local wall balances do
+not assert conservation of the entire engine, nor license counting the same
+fuel/gas energy again as a closed global budget.
+
 `FGTurbineTemperatureTest` covers native observer access, legacy equivalence,
 analytic timestep convergence, energy residual, large-step bounds, radiation,
 heat capacity, augmentation partition/oxygen limit, dynamic invalid inputs and
 cold/warm/trim/reset/state restoration. Additional tests cover independent
 indexed regions, preserved suspension/trim/reset restoration, afterburner bath
 isolation, atomic invalid-input retention, and safe name/config rejection.
-These establish software behavior only.
+Signed-accounting cases independently reconstruct all four heat terms, verify
+read-only indexed properties, separate initialization/restoration from heat,
+check invalid-input atomicity, and compare integrated energy/timestep convergence
+with a closed-form linear heat-balance solution. These establish software
+behavior only.

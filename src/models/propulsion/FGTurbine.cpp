@@ -107,9 +107,11 @@ void FGTurbine::ResetToIC(void)
   OilTemp_degK = in.TAT_c + 273.0;
   ThermalWall.temperature = ThermalGasK = in.TAT_c + 273.15;
   ThermalWall.initialized = ThermalWall.warmPending = false;
+  ThermalWall.heat = {};
   if (Thermal) for (auto& region : Thermal->regions) {
     region->temperature = ThermalGasK;
     region->initialized = region->warmPending = false;
+    region->heat = {};
   }
   ThermalABFuelKgSec = ThermalDryFuelPph = 0.0;
   ThermalABBurnedFuelKgSec = 0.0;
@@ -560,6 +562,7 @@ void FGTurbine::ThermalSolid::SetTemperature(double value)
 {
   if (!std::isfinite(value) || value <= 0.0) return;
   temperature = value;
+  heat = {}; // Restoration establishes a new initial state, never a heat pulse.
   initialized = true;
   warmPending = false;
 }
@@ -574,6 +577,8 @@ void FGTurbine::SetMetalTemperatureStateK(double temperature)
 void FGTurbine::UpdateThermal(void)
 {
   const double ambientK = in.TAT_c + 273.15;
+  ThermalWall.heat = {};
+  for (const auto& region : Thermal->regions) region->heat = {};
   const auto& p = *Thermal;
   const auto value = [](const std::shared_ptr<FGParameter>& parameter, double fallback) {
     return parameter ? parameter->GetValue() : fallback;
@@ -651,40 +656,71 @@ void FGTurbine::UpdateThermal(void)
     // Zero-time, artificial trim and executive suspension never initialize or
     // age solids, even when the engine's cached input timestep is positive.
     const double dt = in.TotalDeltaT;
-    if (dt <= 0.0 || FDMExec->IntegrationSuspended() || FDMExec->GetTrimStatus()) return true;
-    if (!positive(dt)) return false;
+    const bool integrate = !(dt <= 0.0 || FDMExec->IntegrationSuspended()
+                             || FDMExec->GetTrimStatus());
+    if (integrate && !positive(dt)) return false;
     double previous = solid.temperature;
-    if (!solid.initialized && !solid.warmPending) previous = ambientK;
-    if (seedWarm && solid.initialMetalK) {
-      solid.candidateTemperature = initialK;
-      solid.candidateAccepted = true;
-      return true;
-    }
+    if (integrate && !solid.initialized && !solid.warmPending) previous = ambientK;
+    if (!positive(previous)) return false;
     constexpr double sigma = 5.670374419e-8;
     const double radiative = sigma * area * emissivity;
     const double flame = AugmentationActive ? sigma * flameArea * flameEmissivity : 0.0;
-    const double rate = seedWarm ? 0.0 : capacity / dt;
     const auto fourth = [](double t) { double t2 = t * t; return t2 * t2; };
-    const auto residual = [&](double t) {
-      return rate * (t - previous) + hg * (t - gasK)
-        + hc * (t - coolantK) + radiative * (fourth(t) - fourth(surroundingsK))
-        + flame * (fourth(t) - fourth(gasK));
-    };
-    double low = std::min({previous, gasK, coolantK, surroundingsK});
-    double high = std::max({previous, gasK, coolantK, surroundingsK});
-    if (!positive(previous) || !nonnegative(rate) || !std::isfinite(residual(low))
-        || !std::isfinite(residual(high))) return false;
-    if (rate + hg + hc + radiative + flame > 0.0) {
-      for (int i = 0; i < 64; ++i) {
-        double middle = low + (high - low) * 0.5;
-        if (middle == low || middle == high) break;
-        if (residual(middle) > 0.0) high = middle;
-        else low = middle;
+    double result = previous;
+    if (integrate && seedWarm && solid.initialMetalK) result = initialK;
+    else if (integrate) {
+      const double rate = seedWarm ? 0.0 : capacity / dt;
+      const auto residual = [&](double t) {
+        return rate * (t - previous) + hg * (t - gasK)
+          + hc * (t - coolantK) + radiative * (fourth(t) - fourth(surroundingsK))
+          + flame * (fourth(t) - fourth(gasK));
+      };
+      double low = std::min({previous, gasK, coolantK, surroundingsK});
+      double high = std::max({previous, gasK, coolantK, surroundingsK});
+      if (!nonnegative(rate) || !std::isfinite(residual(low))
+          || !std::isfinite(residual(high))) return false;
+      if (rate + hg + hc + radiative + flame > 0.0) {
+        for (int i = 0; i < 64; ++i) {
+          double middle = low + (high - low) * 0.5;
+          if (middle == low || middle == high) break;
+          if (residual(middle) > 0.0) high = middle;
+          else low = middle;
+        }
+        result = low + (high - low) * 0.5;
       }
-      previous = low + (high - low) * 0.5;
     }
-    solid.candidateTemperature = previous;
-    solid.candidateAccepted = true;
+    auto& account = solid.candidateHeat;
+    account = {};
+    account.gasBathK = gasK;
+    account.coolantBathK = coolantK;
+    account.surroundingsBathK = surroundingsK;
+    account.capacity = capacity;
+    account.gasHeatW = hg * (gasK - result);
+    account.coolantHeatW = hc * (coolantK - result);
+    account.surroundingsHeatW = radiative * (fourth(surroundingsK) - fourth(result));
+    account.flameHeatW = flame * (fourth(gasK) - fourth(result));
+    account.netHeatW = account.gasHeatW + account.coolantHeatW
+      + account.surroundingsHeatW + account.flameHeatW;
+    if (!std::isfinite(account.netHeatW)) return false;
+    if (integrate) {
+      if (seedWarm) {
+        // A requested already-running initial condition supplies stored energy
+        // externally. It is not a cold-start transient nor finite-time heating.
+        account.initializationEnergyJ = capacity * (result - solid.temperature);
+      } else {
+        account.initializationEnergyJ = capacity * (previous - solid.temperature);
+        account.stepSeconds = dt;
+        account.storedEnergyJ = capacity * (result - previous);
+        account.heatTransferJ = dt * account.netHeatW;
+        account.residualJ = account.storedEnergyJ - account.heatTransferJ;
+        account.balanceValid = true;
+      }
+    }
+    if (!std::isfinite(account.initializationEnergyJ)
+        || !std::isfinite(account.storedEnergyJ) || !std::isfinite(account.heatTransferJ)
+        || !std::isfinite(account.residualJ)) return false;
+    solid.candidateTemperature = result;
+    solid.candidateAccepted = integrate;
     return true;
   };
   ThermalValid = solve(ThermalWall);
@@ -694,10 +730,16 @@ void FGTurbine::UpdateThermal(void)
     ThermalGasK = std::numeric_limits<double>::quiet_NaN();
     return;
   }
-  if (ThermalWall.candidateAccepted)
-    ThermalWall.SetTemperature(ThermalWall.candidateTemperature);
-  for (const auto& region : p.regions)
-    if (region->candidateAccepted) region->SetTemperature(region->candidateTemperature);
+  const auto commit = [](ThermalSolid& solid) {
+    if (solid.candidateAccepted) {
+      solid.temperature = solid.candidateTemperature;
+      solid.initialized = true;
+      solid.warmPending = false;
+    }
+    solid.heat = solid.candidateHeat;
+  };
+  commit(ThermalWall);
+  for (const auto& region : p.regions) commit(*region);
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -933,8 +975,33 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
                          &FGTurbine::GetAfterburnerFuelFlowKgSec);
     PropertyManager->Tie(thermal + "afterburner-burned-fuel-flow-kg-sec", this,
                          &FGTurbine::GetAfterburnerBurnedFuelFlowKgSec);
+    const auto bindHeat = [&](const string& base, ThermalSolid& solid) {
+      const auto bindValue = [&](const string& name, double* value) {
+        PropertyManager->Tie(base + name, value);
+        PropertyManager->GetNode(base + name, false)->setAttribute(SGPropertyNode::WRITE, false);
+      };
+      auto& heat = solid.heat;
+      bindValue("gas-bath-temperature-k", &heat.gasBathK);
+      bindValue("coolant-bath-temperature-k", &heat.coolantBathK);
+      bindValue("surroundings-bath-temperature-k", &heat.surroundingsBathK);
+      bindValue("heat-capacity-j-k", &heat.capacity);
+      bindValue("gas-heat-flow-w", &heat.gasHeatW);
+      bindValue("coolant-heat-flow-w", &heat.coolantHeatW);
+      bindValue("surroundings-radiation-heat-flow-w", &heat.surroundingsHeatW);
+      bindValue("flame-radiation-heat-flow-w", &heat.flameHeatW);
+      bindValue("net-heat-flow-w", &heat.netHeatW);
+      bindValue("step-seconds", &heat.stepSeconds);
+      bindValue("step-stored-energy-j", &heat.storedEnergyJ);
+      bindValue("step-heat-transfer-j", &heat.heatTransferJ);
+      bindValue("step-energy-residual-j", &heat.residualJ);
+      bindValue("initialization-energy-j", &heat.initializationEnergyJ);
+      PropertyManager->Tie(base + "heat-balance-valid", &heat.balanceValid);
+      PropertyManager->GetNode(base + "heat-balance-valid", false)->setAttribute(SGPropertyNode::WRITE, false);
+    };
+    bindHeat(thermal, ThermalWall);
     for (auto& region : Thermal->regions) {
       const string base = thermal + region->name + "/";
+      bindHeat(base, *region);
       PropertyManager->Tie(base + "metal-temperature-k", region.get(),
                            &ThermalSolid::GetTemperature);
       PropertyManager->Tie(base + "metal-temperature-state-k", region.get(),

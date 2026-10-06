@@ -329,6 +329,17 @@ private:
   double InletPosition;
   double NozzlePosition;
   double correctedTSFC;
+  struct ThermalAccounting {
+    double gasBathK = 0.0, coolantBathK = 0.0, surroundingsBathK = 0.0;
+    double capacity = 0.0;
+    // Heat rates are signed positive into the solid, evaluated at the native
+    // backward-Euler endpoint. These imposed baths are not finite reservoirs.
+    double gasHeatW = 0.0, coolantHeatW = 0.0;
+    double surroundingsHeatW = 0.0, flameHeatW = 0.0, netHeatW = 0.0;
+    double stepSeconds = 0.0, storedEnergyJ = 0.0, heatTransferJ = 0.0;
+    double residualJ = 0.0, initializationEnergyJ = 0.0;
+    bool balanceValid = false;
+  };
   struct ThermalSolid {
     std::string name;
     std::shared_ptr<FGParameter> capacity, gasConductance, coolantConductance;
@@ -338,6 +349,7 @@ private:
     double temperature = 0.0;
     double candidateTemperature = 0.0;
     bool candidateAccepted = false;
+    ThermalAccounting heat, candidateHeat;
     bool initialized = false;
     bool warmPending = false;
     double GetTemperature(void) const { return temperature; }

@@ -573,4 +573,169 @@ public:
       TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000, invalid)));
   }
 
+  void testSignedThermalAccountingUsesAcceptedBackwardEulerEndpoint() {
+    TurbineTemperatureFixture f(2, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 50, .5, .8, 1000,
+        "<coolant-temperature-k>300</coolant-temperature-k>" + TurbineTemperatureFixture::core()));
+    auto pm = f.exec.GetPropertyManager();
+    const std::string base = "propulsion/engine[2]/thermal/";
+    auto get = [&](const std::string& path) { return pm->GetNode(base + path, false)->getDoubleValue(); };
+    f.engine->SetMetalTemperatureStateK(700.0);
+    pm->GetNode(base + "core/metal-temperature-state-k", false)->setDoubleValue(700.0);
+    f.engine->Calculate();
+    const double sigma = 5.670374419e-8;
+    for (const auto& prefix : {std::string(""), std::string("core/")}) {
+      const bool core = !prefix.empty();
+      const double temperature = get(prefix + "metal-temperature-k");
+      const double gas = (core ? 200.0 : 100.0) * ((core ? 950.0 : 1000.0) - temperature);
+      const double coolant = (core ? 20.0 : 50.0) * ((core ? 288.15 : 300.0) - temperature);
+      const double radiation = sigma * .8 * (core ? .2 : .5)
+        * (std::pow(288.15, 4) - std::pow(temperature, 4));
+      const double capacity = core ? 2000.0 : 1000.0;
+      TS_ASSERT_DELTA(get(prefix + "gas-heat-flow-w"), gas, 1e-9);
+      TS_ASSERT_DELTA(get(prefix + "coolant-heat-flow-w"), coolant, 1e-9);
+      TS_ASSERT_DELTA(get(prefix + "surroundings-radiation-heat-flow-w"), radiation, 1e-9);
+      TS_ASSERT_EQUALS(get(prefix + "flame-radiation-heat-flow-w"), 0.0);
+      TS_ASSERT_DELTA(get(prefix + "net-heat-flow-w"), gas + coolant + radiation, 1e-9);
+      TS_ASSERT_EQUALS(get(prefix + "heat-capacity-j-k"), capacity);
+      TS_ASSERT_EQUALS(get(prefix + "heat-balance-valid"), 1.0);
+      TS_ASSERT_EQUALS(get(prefix + "step-seconds"), .1);
+      TS_ASSERT_EQUALS(get(prefix + "initialization-energy-j"), 0.0);
+      TS_ASSERT_DELTA(get(prefix + "step-stored-energy-j"), capacity * (temperature - 700.0), 1e-10);
+      TS_ASSERT_DELTA(get(prefix + "step-heat-transfer-j"), .1 * (gas + coolant + radiation), 1e-9);
+      TS_ASSERT_DELTA(get(prefix + "step-energy-residual-j"), 0.0, 1e-7);
+      TS_ASSERT(gas > 0 && coolant < 0 && radiation < 0);
+      for (const auto& name : {"gas-bath-temperature-k", "coolant-bath-temperature-k",
+          "surroundings-bath-temperature-k", "heat-capacity-j-k", "gas-heat-flow-w",
+          "coolant-heat-flow-w", "surroundings-radiation-heat-flow-w", "flame-radiation-heat-flow-w",
+          "net-heat-flow-w", "step-seconds", "step-stored-energy-j", "step-heat-transfer-j",
+          "step-energy-residual-j", "initialization-energy-j", "heat-balance-valid"}) {
+        auto node = pm->GetNode(base + prefix + name, false);
+        const double before = node->getDoubleValue();
+        TS_ASSERT(!node->getAttribute(SGPropertyNode::WRITE));
+        TS_ASSERT(!node->setDoubleValue(123456.0));
+        TS_ASSERT_EQUALS(node->getDoubleValue(), before);
+      }
+    }
+  }
+
+  void testWarmSeedAndRestorationAreNotInventedIntegratedHeat() {
+    TurbineTemperatureFixture f(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 0, 0, 0, 1000,
+        "<initial-metal-temperature-k>750</initial-metal-temperature-k>" + TurbineTemperatureFixture::core()));
+    auto pm = f.exec.GetPropertyManager();
+    const std::string base = "propulsion/engine/thermal/";
+    auto get = [&](const std::string& path) { return pm->GetNode(base + path, false)->getDoubleValue(); };
+    f.exec.Setdt(.1);
+    f.engine->InitRunning();
+    TS_ASSERT_EQUALS(get("step-seconds"), 0.0);
+    TS_ASSERT_EQUALS(get("initialization-energy-j"), 0.0);
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(get("metal-temperature-k"), 750.0);
+    TS_ASSERT_EQUALS(get("heat-balance-valid"), 0.0);
+    TS_ASSERT_EQUALS(get("step-stored-energy-j"), 0.0);
+    TS_ASSERT_EQUALS(get("step-heat-transfer-j"), 0.0);
+    TS_ASSERT_DELTA(get("initialization-energy-j"), 1000.0 * (750.0 - 288.15), 1e-8);
+    TS_ASSERT_DELTA(get("core/initialization-energy-j"), 2000.0 * (get("core/metal-temperature-k") - 288.15), 1e-8);
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(get("heat-balance-valid"), 1.0);
+    TS_ASSERT_EQUALS(get("initialization-energy-j"), 0.0);
+    const double temperature = get("metal-temperature-k");
+    f.input.TotalDeltaT = 0.0;
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(get("metal-temperature-k"), temperature);
+    TS_ASSERT_EQUALS(get("heat-balance-valid"), 0.0);
+    TS_ASSERT_EQUALS(get("step-seconds"), 0.0);
+    TS_ASSERT_EQUALS(get("step-heat-transfer-j"), 0.0);
+    TS_ASSERT_EQUALS(get("initialization-energy-j"), 0.0);
+    TS_ASSERT(get("gas-heat-flow-w") > 0.0); // An instantaneous rate is not transferred energy.
+    f.engine->SetMetalTemperatureStateK(820.0);
+    TS_ASSERT_EQUALS(get("step-heat-transfer-j"), 0.0);
+    TS_ASSERT_EQUALS(get("initialization-energy-j"), 0.0);
+    f.input.TotalDeltaT = .1;
+    f.exec.SuspendIntegration();
+    f.engine->Calculate();
+    f.exec.ResumeIntegration();
+    TS_ASSERT_EQUALS(get("metal-temperature-k"), 820.0);
+    TS_ASSERT_EQUALS(get("step-seconds"), 0.0);
+    TS_ASSERT_EQUALS(get("step-heat-transfer-j"), 0.0);
+    f.exec.SetTrimStatus(true);
+    f.engine->Calculate();
+    f.exec.SetTrimStatus(false);
+    TS_ASSERT_EQUALS(get("step-heat-transfer-j"), 0.0);
+    f.engine->ResetToIC();
+    TS_ASSERT_EQUALS(get("heat-capacity-j-k"), 0.0);
+    TS_ASSERT_EQUALS(get("heat-balance-valid"), 0.0);
+  }
+
+  void testEnergyIntegralConvergesToIndependentLinearSolution() {
+    double previousError = 1e9;
+    for (int hz : {30, 60, 120, 240}) {
+      TurbineTemperatureFixture f(0, 15.0, TurbineTemperatureFixture::thermal());
+      const std::string base = "propulsion/engine/thermal/";
+      auto get = [&](const std::string& path) { return f.exec.GetPropertyManager()->GetNode(base + path, false)->getDoubleValue(); };
+      f.input.TotalDeltaT = 1.0 / hz;
+      double integral = 0.0;
+      for (int i = 0; i < hz; ++i) {
+        f.engine->Calculate();
+        integral += get("gas-heat-flow-w") / hz;
+        TS_ASSERT_DELTA(get("step-energy-residual-j"), 0.0, 1e-7);
+      }
+      const double delta = 1000.0 * (f.engine->GetMetalTemperatureK() - 288.15);
+      TS_ASSERT_DELTA(delta, integral, 1e-5);
+      const double exact = 1000.0 + (288.15 - 1000.0) * std::exp(-.1);
+      const double error = std::abs(f.engine->GetMetalTemperatureK() - exact);
+      TS_ASSERT(error < previousError);
+      previousError = error;
+    }
+    TS_ASSERT(previousError < .014);
+  }
+
+  void testInvalidRegionCannotPublishPartialHeatReceipt() {
+    std::string core = TurbineTemperatureFixture::core();
+    const std::string original = "<gas-temperature-k>950</gas-temperature-k>";
+    core.replace(core.find(original), original.size(),
+      "<gas-temperature-k><function><property>thermal-test/core-k</property></function></gas-temperature-k>");
+    TurbineTemperatureFixture f(0, 15.0, TurbineTemperatureFixture::thermal(1000, 100, 0, 0, 0, 1000, core));
+    auto pm = f.exec.GetPropertyManager();
+    pm->GetNode("thermal-test/core-k", true)->setDoubleValue(950.0);
+    f.engine->Calculate();
+    TS_ASSERT(pm->GetNode("propulsion/engine/thermal/step-heat-transfer-j", false)->getDoubleValue() > 0.0);
+    const double before = f.engine->GetMetalTemperatureK();
+    pm->GetNode("thermal-test/core-k", false)->setDoubleValue(-1.0);
+    f.engine->Calculate();
+    TS_ASSERT(!f.engine->GetThermalValid());
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), before);
+    TS_ASSERT_EQUALS(pm->GetNode("propulsion/engine/thermal/step-heat-transfer-j", false)->getDoubleValue(), 0.0);
+    TS_ASSERT_EQUALS(pm->GetNode("propulsion/engine/thermal/core/step-heat-transfer-j", false)->getDoubleValue(), 0.0);
+    TS_ASSERT_EQUALS(pm->GetNode("propulsion/engine/thermal/heat-balance-valid", false)->getBoolValue(), false);
+  }
+
+  void testAugmentedRadiationIsSeparateSignedEndpointExchange() {
+    TurbineTemperatureFixture f(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 50, .5, .8, 1000,
+        "<flame-radiation-area-sq-m>0.4</flame-radiation-area-sq-m><flame-emissivity>0.05</flame-emissivity>"));
+    auto pm = f.exec.GetPropertyManager();
+    const std::string base = "propulsion/engine/thermal/";
+    auto get = [&](const std::string& path) { return pm->GetNode(base + path, false)->getDoubleValue(); };
+    f.input.ThrottlePos[0] = 1.0;
+    f.engine->InitRunning();
+    f.engine->SetMetalTemperatureStateK(700.0);
+    f.engine->SetAugmentation(true);
+    f.engine->Calculate();
+    TS_ASSERT(f.engine->GetAugmentationActive());
+    const double t = f.engine->GetMetalTemperatureK();
+    const double gas = f.engine->GetNozzleGasTemperatureK();
+    const double expected = 5.670374419e-8 * .4 * .05 * (std::pow(gas, 4) - std::pow(t, 4));
+    TS_ASSERT(expected > 0.0);
+    TS_ASSERT_DELTA(get("flame-radiation-heat-flow-w"), expected, 1e-8);
+    const double sum = get("gas-heat-flow-w") + get("coolant-heat-flow-w")
+      + get("surroundings-radiation-heat-flow-w") + expected;
+    TS_ASSERT_DELTA(get("net-heat-flow-w"), sum, 1e-8);
+    TS_ASSERT_DELTA(1000.0 * (t - 700.0), sum * .1, 1e-7);
+    f.engine->SetAugmentation(false);
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(get("flame-radiation-heat-flow-w"), 0.0);
+  }
+
 };
