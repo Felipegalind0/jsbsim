@@ -256,6 +256,30 @@ public:
     TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), 820.0);
   }
 
+  void testInitRunningSuspensionOverridesCachedPositiveInputDeltaT() {
+    TurbineTemperatureFixture f(0, 15.0, TurbineTemperatureFixture::thermal());
+    f.exec.Setdt(0.1);
+    f.input.TotalDeltaT = 0.1;
+    const double cold = f.engine->GetMetalTemperatureK();
+    f.engine->InitRunning();
+    TS_ASSERT(!f.engine->GetThermalInitialized());
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), cold);
+    TS_ASSERT(!f.exec.IntegrationSuspended());
+    f.engine->Calculate();
+    TS_ASSERT(f.engine->GetThermalInitialized());
+    TS_ASSERT_DELTA(f.engine->GetMetalTemperatureK(), 1000.0, 1e-10);
+    f.engine->SetMetalTemperatureStateK(820.0);
+    f.engine->InitRunning();
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), 820.0);
+    TS_ASSERT(f.engine->GetThermalInitialized());
+    f.exec.SuspendIntegration();
+    for (int i = 0; i < 10; ++i) f.engine->Calculate();
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), 820.0);
+    f.exec.ResumeIntegration();
+    f.engine->Calculate();
+    TS_ASSERT(f.engine->GetMetalTemperatureK() > 820.0);
+  }
+
   void testExplicitWarmInitialWallIsOneShot() {
     TurbineTemperatureFixture f(0, 15.0, TurbineTemperatureFixture::thermal(1000, 100, 0, 0, 0, 1000,
       "<initial-metal-temperature-k>750</initial-metal-temperature-k>"));

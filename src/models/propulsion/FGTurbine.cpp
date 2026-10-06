@@ -609,7 +609,7 @@ void FGTurbine::UpdateThermal(void)
   // Engine steady-state search uses an artificial dt=0.5 under TrimStatus.
   // Neither it nor zero-time RunIC may age or initialize real thermal state.
   const double dt = in.TotalDeltaT;
-  if (dt <= 0.0 || FDMExec->GetTrimStatus()) return;
+  if (dt <= 0.0 || FDMExec->IntegrationSuspended() || FDMExec->GetTrimStatus()) return;
   if (!positive(dt)) { ThermalValid = false; return; }
   const bool seedWarm = !ThermalInitialized && ThermalWarmPending;
   // Initial conditions can change atmosphere after construction/ResetToIC.

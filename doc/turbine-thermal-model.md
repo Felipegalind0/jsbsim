@@ -92,7 +92,9 @@ All paths are under `propulsion/engine[n]/thermal/`:
 | `afterburner-fuel-flow-kg-sec` | R, supplied excess burner fuel |
 | `afterburner-burned-fuel-flow-kg-sec` | R, heat-releasing burner fuel |
 
-Reads do not advance state. Zero-time RunIC and artificial positive-time trim
+Reads do not advance state. Executive integration suspension takes precedence
+over a stale positive engine-input timestep (including InitRunning). Zero-time
+RunIC and artificial positive-time trim
 search do not initialize or age the wall. Explicit `InitRunning` on a new state
 marks warm initialization pending; the first real step uses final operating
 inputs to seed equilibrium or the declared initial temperature. Ordinary cold
