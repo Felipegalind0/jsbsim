@@ -41,6 +41,7 @@ INCLUDES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
 #include "FGEngine.h"
+#include <vector>
 
 
 /*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -151,7 +152,7 @@ CLASS DOCUMENTATION
 </pre>
 
 <h3>Optional thermal observer:</h3>
-    A &lt;thermal&gt; block enables separate nozzle-gas and persistent wall
+    A &lt;thermal&gt; block enables separate nozzle-gas and persistent solid-region
     temperatures in Kelvin, without feedback into thrust or fuel calculations.
     It requires explicit SI flow, heat capacity, conductance and radiation data.
     Each field accepts a literal or an unnamed &lt;function&gt;. See
@@ -238,10 +239,10 @@ public:
   double GetEPR(void) const {return EPR;}
   double GetEGT(void) const {return EGT_degC;}
   double GetNozzleGasTemperatureK(void) const {return ThermalGasK;}
-  double GetMetalTemperatureK(void) const {return ThermalMetalK;}
+  double GetMetalTemperatureK(void) const {return ThermalWall.temperature;}
   double GetAfterburnerFuelFlowKgSec(void) const {return ThermalABFuelKgSec;}
   double GetAfterburnerBurnedFuelFlowKgSec(void) const {return ThermalABBurnedFuelKgSec;}
-  bool GetThermalInitialized(void) const {return ThermalInitialized;}
+  bool GetThermalInitialized(void) const {return ThermalWall.initialized;}
   bool GetThermalValid(void) const {return ThermalValid;}
   /** Explicit state restoration, not an engine control or display temperature. */
   void SetMetalTemperatureStateK(double temperature);
@@ -328,23 +329,33 @@ private:
   double InletPosition;
   double NozzlePosition;
   double correctedTSFC;
-  struct ThermalParameters {
-    std::shared_ptr<FGParameter> gasFlow, gasCp, fuelHeat, efficiency;
+  struct ThermalSolid {
+    std::string name;
     std::shared_ptr<FGParameter> capacity, gasConductance, coolantConductance;
     std::shared_ptr<FGParameter> area, emissivity;
-    std::shared_ptr<FGParameter> baseGasK, coolantK, surroundingsK, initialMetalK;
+    std::shared_ptr<FGParameter> gasK, coolantK, surroundingsK, initialMetalK;
     std::shared_ptr<FGParameter> flameArea, flameEmissivity;
-    std::shared_ptr<FGParameter> stoichiometricRatio;
+    double temperature = 0.0;
+    double candidateTemperature = 0.0;
+    bool candidateAccepted = false;
+    bool initialized = false;
+    bool warmPending = false;
+    double GetTemperature(void) const { return temperature; }
+    bool GetInitialized(void) const { return initialized; }
+    void SetTemperature(double value);
+  };
+  struct ThermalParameters {
+    std::shared_ptr<FGParameter> gasFlow, gasCp, fuelHeat, efficiency;
+    std::shared_ptr<FGParameter> baseGasK, stoichiometricRatio;
+    std::vector<std::unique_ptr<ThermalSolid>> regions;
   };
   std::unique_ptr<ThermalParameters> Thermal;
+  ThermalSolid ThermalWall;
   double ThermalGasK = 0.0;
-  double ThermalMetalK = 0.0;
   double ThermalABFuelKgSec = 0.0;
   double ThermalABBurnedFuelKgSec = 0.0;
   double ThermalDryFuelPph = 0.0;
-  bool ThermalInitialized = false;
   bool ThermalValid = false;
-  bool ThermalWarmPending = false;
   double InjectionTimer;
   double InjectionTime;
   double InjWaterNorm;

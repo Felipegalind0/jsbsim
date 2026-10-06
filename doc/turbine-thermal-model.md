@@ -3,7 +3,7 @@
 `FGTurbine` owns this opt-in model. An engine without `<thermal>` retains its
 existing behavior and has no thermal properties. The extension observes current
 native fuel and augmentation; it does not change thrust, fuel, spool, EGT or
-nozzle calculations. It is an effective thermal lump, not a cycle or combustion
+nozzle calculations. It is a set of independent effective thermal regions, not a cycle or combustion
 chemistry solver. Engine authors must supply appropriate data and uncertainty.
 
 ## Configuration
@@ -38,6 +38,28 @@ remaining fuel-burning capacity. Omission leaves combustion unconstrained;
 there is no implicit universal fuel chemistry. Invalid constant parameters
 reject model loading before engine property bindings. Invalid dynamic values
 clear `valid`, publish NaN gas temperature and retain the last wall state.
+
+### Optional additional solid regions
+
+The original flat wall fields and property paths retain their meaning. Each
+optional `<solid-region name="core">` inside `<thermal>` adds another independent
+solid using the same required wall capacity, gas/coolant conductance, radiation
+area and emissivity fields. Each accepts its own optional coolant, surroundings,
+initial temperature and flame-radiation fields. Names are unique within the
+engine and contain only lowercase ASCII letters, digits and hyphens.
+
+An optional `gas-temperature-k` on either the original wall or an additional
+solid selects that solid's gas bath. Omission uses the downstream nozzle gas
+energy balance. A core-facing solid upstream of the afterburner can explicitly
+use EGT + 273.15, avoiding an unphysical response to downstream heat addition.
+This is a declared bath estimate, not a new measured station temperature.
+
+Every region has independent native state and warm/cold initialization. They
+exchange heat with declared baths, not directly with one another. All parameter
+functions are evaluated once per calculation. Invalid input in any region clears
+the shared `valid` flag and preserves every solid; candidate states are committed
+only after all regions validate. Storage is allocated once during engine load.
+No solid-region element means exactly the original single-wall model.
 
 ## Balance and limitations
 
@@ -108,9 +130,17 @@ property immediately after reset, before RunIC/InitRunning. Its setter accepts
 finite positive Kelvin, establishes initialization and cancels pending warm
 seeding; rejected values leave state unchanged. Gas is algebraic and refreshes
 from the next evaluation. Repeated InitRunning on established state retains it.
-Consumers should gate wall observations by both `valid` and `initialized`.
+Additional regions publish the same three solid-specific properties beneath
+`thermal/<name>/`: read-only `metal-temperature-k`, read/write
+`metal-temperature-state-k`, and read-only `initialized`. Capture and restore
+each initialized solid independently; restoring one never initializes or
+reseeds another. The original properties still refer only to the original wall.
+Consumers should gate each solid by shared `valid` and its own `initialized`.
 
 `FGTurbineTemperatureTest` covers native observer access, legacy equivalence,
 analytic timestep convergence, energy residual, large-step bounds, radiation,
 heat capacity, augmentation partition/oxygen limit, dynamic invalid inputs and
-cold/warm/trim/reset/state restoration. These establish software behavior only.
+cold/warm/trim/reset/state restoration. Additional tests cover independent
+indexed regions, preserved suspension/trim/reset restoration, afterburner bath
+isolation, atomic invalid-input retention, and safe name/config rejection.
+These establish software behavior only.

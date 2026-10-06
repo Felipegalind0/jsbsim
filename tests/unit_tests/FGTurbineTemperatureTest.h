@@ -65,6 +65,16 @@ public:
     return xml.str();
   }
 
+  static std::string core(const std::string& extra = "") {
+    return "<solid-region name=\"core\">"
+      "<wall-heat-capacity-j-k>2000</wall-heat-capacity-j-k>"
+      "<gas-conductance-w-k>200</gas-conductance-w-k>"
+      "<coolant-conductance-w-k>20</coolant-conductance-w-k>"
+      "<radiation-area-sq-m>0.2</radiation-area-sq-m>"
+      "<emissivity>0.8</emissivity>"
+      "<gas-temperature-k>950</gas-temperature-k>" + extra + "</solid-region>";
+  }
+
   ~TurbineTemperatureFixture() {
     // This engine is outside exec's owned propulsion list. Untie its pointer,
     // function and thruster bindings while every referenced object is alive.
@@ -434,4 +444,133 @@ public:
     TS_ASSERT_THROWS_ANYTHING(TurbineTemperatureFixture(0, 15.0,
       TurbineTemperatureFixture::thermal(1000, 100, 0, 1, 1.1)));
   }
+  void testIndependentSolidRegionsAndIndexedReadOnlyObservations() {
+    TurbineTemperatureFixture f(2, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000,
+        TurbineTemperatureFixture::core()));
+    auto pm = f.exec.GetPropertyManager();
+    auto core = pm->GetNode("propulsion/engine[2]/thermal/core/metal-temperature-k", false);
+    auto state = pm->GetNode("propulsion/engine[2]/thermal/core/metal-temperature-state-k", false);
+    auto initialized = pm->GetNode("propulsion/engine[2]/thermal/core/initialized", false);
+    TS_ASSERT(core && state && initialized);
+    TS_ASSERT(!core->getAttribute(SGPropertyNode::WRITE));
+    TS_ASSERT(!initialized->getAttribute(SGPropertyNode::WRITE));
+    TS_ASSERT(!core->setDoubleValue(999.0));
+    TS_ASSERT(!initialized->getBoolValue());
+    f.engine->Calculate();
+    TS_ASSERT(initialized->getBoolValue());
+    TS_ASSERT(core->getDoubleValue() > 288.15);
+    TS_ASSERT(core->getDoubleValue() < 300.0);
+    for (int i = 0; i < 2000; ++i) f.engine->Calculate();
+    TS_ASSERT(core->getDoubleValue() > f.engine->GetMetalTemperatureK() + 200.0);
+    TS_ASSERT(core->getDoubleValue() < 950.0);
+    const double downstream = f.engine->GetMetalTemperatureK();
+    state->setDoubleValue(820.0);
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 820.0);
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), downstream);
+    state->setDoubleValue(-1.0);
+    state->setDoubleValue(std::numeric_limits<double>::quiet_NaN());
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 820.0);
+  }
+
+  void testEachSolidPreservesWarmStateAcrossSuspensionTrimAndResetRestore() {
+    TurbineTemperatureFixture f(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000,
+        TurbineTemperatureFixture::core("<initial-metal-temperature-k>780</initial-metal-temperature-k>")));
+    auto pm = f.exec.GetPropertyManager();
+    const std::string path = "propulsion/engine/thermal/core/";
+    auto core = pm->GetNode(path + "metal-temperature-state-k", false);
+    auto initialized = pm->GetNode(path + "initialized", false);
+    f.exec.Setdt(0.1);
+    f.engine->InitRunning();
+    TS_ASSERT(!initialized->getBoolValue());
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 288.15);
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 780.0);
+    core->setDoubleValue(840.0);
+    f.engine->SetMetalTemperatureStateK(720.0);
+    f.engine->InitRunning();
+    f.exec.SuspendIntegration();
+    for (int i = 0; i < 10; ++i) f.engine->Calculate();
+    f.exec.ResumeIntegration();
+    f.exec.SetTrimStatus(true);
+    for (int i = 0; i < 10; ++i) f.engine->Calculate();
+    f.exec.SetTrimStatus(false);
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 840.0);
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), 720.0);
+    f.engine->ResetToIC();
+    TS_ASSERT(!initialized->getBoolValue());
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 288.15);
+    core->setDoubleValue(840.0);
+    f.engine->SetMetalTemperatureStateK(720.0);
+    f.input.TotalDeltaT = 0.0;
+    f.engine->InitRunning();
+    f.engine->Calculate();
+    TS_ASSERT_EQUALS(core->getDoubleValue(), 840.0);
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), 720.0);
+    f.input.TotalDeltaT = 0.1;
+    f.engine->Calculate();
+    TS_ASSERT(std::abs(core->getDoubleValue() - 840.0) < 2.0);
+    TS_ASSERT(std::abs(f.engine->GetMetalTemperatureK() - 720.0) < 2.0);
+  }
+
+  void testAfterburnerDoesNotHeatSolidWithSeparateUpstreamGasBath() {
+    TurbineTemperatureFixture f(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000,
+        TurbineTemperatureFixture::core()));
+    auto core = f.exec.GetPropertyManager()->GetNode(
+      "propulsion/engine/thermal/core/metal-temperature-k", false);
+    f.input.ThrottlePos[0] = 1.0;
+    f.engine->InitRunning();
+    f.engine->Calculate();
+    const double dryCore = core->getDoubleValue();
+    const double dryWall = f.engine->GetMetalTemperatureK();
+    f.engine->SetAugmentation(true);
+    for (int i = 0; i < 2000; ++i) f.engine->Calculate();
+    TS_ASSERT(f.engine->GetAugmentationActive());
+    TS_ASSERT_DELTA(core->getDoubleValue(), dryCore, 1e-10);
+    TS_ASSERT(f.engine->GetMetalTemperatureK() > dryWall + 100.0);
+  }
+
+  void testInvalidRegionInputRetainsAllSolidsAtomically() {
+    std::string coreXML = TurbineTemperatureFixture::core();
+    const std::string original = "<gas-temperature-k>950</gas-temperature-k>";
+    coreXML.replace(coreXML.find(original), original.size(),
+      "<gas-temperature-k><function><property>thermal-test/core-k</property></function></gas-temperature-k>");
+    TurbineTemperatureFixture f(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000, coreXML));
+    auto pm = f.exec.GetPropertyManager();
+    auto bath = pm->GetNode("thermal-test/core-k", true);
+    auto core = pm->GetNode("propulsion/engine/thermal/core/metal-temperature-state-k", false);
+    bath->setDoubleValue(950.0);
+    f.engine->Calculate();
+    const double wallBefore = f.engine->GetMetalTemperatureK();
+    const double coreBefore = core->getDoubleValue();
+    bath->setDoubleValue(-1.0);
+    f.engine->Calculate();
+    TS_ASSERT(!f.engine->GetThermalValid());
+    TS_ASSERT(std::isnan(f.engine->GetNozzleGasTemperatureK()));
+    TS_ASSERT_EQUALS(core->getDoubleValue(), coreBefore);
+    TS_ASSERT_EQUALS(f.engine->GetMetalTemperatureK(), wallBefore);
+    bath->setDoubleValue(950.0);
+    f.engine->Calculate();
+    TS_ASSERT(f.engine->GetThermalValid());
+    TS_ASSERT(core->getDoubleValue() > coreBefore);
+    TS_ASSERT(f.engine->GetMetalTemperatureK() > wallBefore);
+  }
+
+  void testRejectedRegionNamesAndConstantsUnwindBeforeBinding() {
+    const std::string core = TurbineTemperatureFixture::core();
+    TS_ASSERT_THROWS_ANYTHING(TurbineTemperatureFixture(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000, core + core)));
+    std::string invalid = core;
+    invalid.replace(invalid.find("name=\"core\""), 11, "name=\"../core\"");
+    TS_ASSERT_THROWS_ANYTHING(TurbineTemperatureFixture(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000, invalid)));
+    invalid = core;
+    invalid.replace(invalid.find(">2000<"), 6, ">0<");
+    TS_ASSERT_THROWS_ANYTHING(TurbineTemperatureFixture(0, 15.0,
+      TurbineTemperatureFixture::thermal(1000, 100, 100, 0, 0, 1000, invalid)));
+  }
+
 };

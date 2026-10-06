@@ -105,10 +105,15 @@ void FGTurbine::ResetToIC(void)
   phase = tpOff;
   EGT_degC = in.TAT_c;
   OilTemp_degK = in.TAT_c + 273.0;
-  ThermalMetalK = ThermalGasK = in.TAT_c + 273.15;
+  ThermalWall.temperature = ThermalGasK = in.TAT_c + 273.15;
+  ThermalWall.initialized = ThermalWall.warmPending = false;
+  if (Thermal) for (auto& region : Thermal->regions) {
+    region->temperature = ThermalGasK;
+    region->initialized = region->warmPending = false;
+  }
   ThermalABFuelKgSec = ThermalDryFuelPph = 0.0;
   ThermalABBurnedFuelKgSec = 0.0;
-  ThermalInitialized = ThermalValid = ThermalWarmPending = false;
+  ThermalValid = false;
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -513,29 +518,55 @@ void FGTurbine::LoadThermal(FGFDMExec* exec, Element* el)
   parameters->gasCp = read("gas-specific-heat-j-kg-k", true, true);
   parameters->fuelHeat = read("fuel-heating-value-j-kg", true, true);
   parameters->efficiency = read("afterburner-efficiency", true, false, true);
-  parameters->capacity = read("wall-heat-capacity-j-k", true, true);
-  parameters->gasConductance = read("gas-conductance-w-k", true, false);
-  parameters->coolantConductance = read("coolant-conductance-w-k", true, false);
-  parameters->area = read("radiation-area-sq-m", true, false);
-  parameters->emissivity = read("emissivity", true, false, true);
   parameters->baseGasK = read("base-gas-temperature-k", false, true);
-  parameters->coolantK = read("coolant-temperature-k", false, true);
-  parameters->surroundingsK = read("surroundings-temperature-k", false, true);
-  parameters->initialMetalK = read("initial-metal-temperature-k", false, true);
-  parameters->flameArea = read("flame-radiation-area-sq-m", false, false);
-  parameters->flameEmissivity = read("flame-emissivity", false, false, true);
   parameters->stoichiometricRatio = read("stoichiometric-fuel-air-ratio", false, true);
+  const auto readSolid = [&](ThermalSolid& solid) {
+    solid.capacity = read("wall-heat-capacity-j-k", true, true);
+    solid.gasConductance = read("gas-conductance-w-k", true, false);
+    solid.coolantConductance = read("coolant-conductance-w-k", true, false);
+    solid.area = read("radiation-area-sq-m", true, false);
+    solid.emissivity = read("emissivity", true, false, true);
+    solid.gasK = read("gas-temperature-k", false, true);
+    solid.coolantK = read("coolant-temperature-k", false, true);
+    solid.surroundingsK = read("surroundings-temperature-k", false, true);
+    solid.initialMetalK = read("initial-metal-temperature-k", false, true);
+    solid.flameArea = read("flame-radiation-area-sq-m", false, false);
+    solid.flameEmissivity = read("flame-emissivity", false, false, true);
+  };
+  readSolid(ThermalWall);
+  Element* thermalBlock = block;
+  for (block = thermalBlock->FindElement("solid-region"); block;
+       block = thermalBlock->FindNextElement("solid-region")) {
+    auto region = std::make_unique<ThermalSolid>();
+    region->name = block->GetAttributeValue("name");
+    bool duplicate = false;
+    for (const auto& prior : parameters->regions)
+      duplicate = duplicate || prior->name == region->name;
+    if (region->name.empty() || duplicate ||
+        region->name.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != string::npos) {
+      XMLLogException err(block);
+      err << "Thermal solid-region requires a unique lowercase alphanumeric/hyphen name.\n";
+      throw err;
+    }
+    readSolid(*region);
+    parameters->regions.push_back(std::move(region));
+  }
   Thermal = std::move(parameters);
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+void FGTurbine::ThermalSolid::SetTemperature(double value)
+{
+  if (!std::isfinite(value) || value <= 0.0) return;
+  temperature = value;
+  initialized = true;
+  warmPending = false;
+}
+
 void FGTurbine::SetMetalTemperatureStateK(double temperature)
 {
-  if (!Thermal || !std::isfinite(temperature) || temperature <= 0.0) return;
-  ThermalMetalK = temperature;
-  ThermalInitialized = true;
-  ThermalWarmPending = false;
+  if (Thermal) ThermalWall.SetTemperature(temperature);
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -551,25 +582,12 @@ void FGTurbine::UpdateThermal(void)
   const double cp = p.gasCp->GetValue();
   const double heat = p.fuelHeat->GetValue();
   const double efficiency = p.efficiency->GetValue();
-  const double capacity = p.capacity->GetValue();
-  const double hg = p.gasConductance->GetValue();
-  const double hc = p.coolantConductance->GetValue();
-  const double area = p.area->GetValue();
-  const double emissivity = p.emissivity->GetValue();
   const double baseK = value(p.baseGasK, EGT_degC + 273.15);
-  const double coolantK = value(p.coolantK, ambientK);
-  const double surroundingsK = value(p.surroundingsK, ambientK);
-  const double flameArea = value(p.flameArea, 0.0);
-  const double flameEmissivity = value(p.flameEmissivity, 0.0);
   const double stoichiometricRatio = value(p.stoichiometricRatio, 0.0);
   const auto nonnegative = [](double v) { return std::isfinite(v) && v >= 0.0; };
   const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
   ThermalValid = nonnegative(gasFlow) && positive(cp) && positive(heat)
-    && nonnegative(efficiency) && efficiency <= 1.0 && positive(capacity)
-    && nonnegative(hg) && nonnegative(hc) && nonnegative(area)
-    && nonnegative(emissivity) && emissivity <= 1.0 && positive(baseK)
-    && positive(coolantK) && positive(surroundingsK) && positive(ThermalMetalK)
-    && nonnegative(flameArea) && nonnegative(flameEmissivity) && flameEmissivity <= 1.0
+    && nonnegative(efficiency) && efficiency <= 1.0 && positive(baseK)
     && (!p.stoichiometricRatio || positive(stoichiometricRatio));
   ThermalABFuelKgSec = ThermalABBurnedFuelKgSec = 0.0;
   if (AugmentationActive && ThermalValid) {
@@ -606,55 +624,80 @@ void FGTurbine::UpdateThermal(void)
   }
   if (!positive(ThermalGasK)) { ThermalValid = false; return; }
 
-  // Engine steady-state search uses an artificial dt=0.5 under TrimStatus.
-  // Neither it nor zero-time RunIC may age or initialize real thermal state.
-  const double dt = in.TotalDeltaT;
-  if (dt <= 0.0 || FDMExec->IntegrationSuspended() || FDMExec->GetTrimStatus()) return;
-  if (!positive(dt)) { ThermalValid = false; return; }
-  const bool seedWarm = !ThermalInitialized && ThermalWarmPending;
-  // Initial conditions can change atmosphere after construction/ResetToIC.
-  // Seed a genuinely cold engine from its first accepted-step environment.
-  if (!ThermalInitialized && !ThermalWarmPending) {
-    if (!positive(ambientK)) { ThermalValid = false; return; }
-    ThermalMetalK = ambientK;
-  }
-  if (seedWarm && p.initialMetalK) {
-    const double initialK = p.initialMetalK->GetValue();
-    if (!positive(initialK)) { ThermalValid = false; return; }
-    SetMetalTemperatureStateK(initialK);
-    return;
-  }
-  constexpr double sigma = 5.670374419e-8; // W/(m^2 K^4), SI Stefan-Boltzmann constant.
-  const double radiative = sigma * area * emissivity;
-  // Effective incident gray radiation is explicit optional data, not an
-  // assumption that a transparent combustion gas is a blackbody.
-  const double flame = AugmentationActive ? sigma * flameArea * flameEmissivity : 0.0;
-  const double rate = seedWarm ? 0.0 : capacity / dt;
-  const auto fourth = [](double t) { double t2 = t * t; return t2 * t2; };
-  const auto residual = [&](double t) {
-    return rate * (t - ThermalMetalK) + hg * (t - ThermalGasK)
-      + hc * (t - coolantK) + radiative * (fourth(t) - fourth(surroundingsK))
-      + flame * (fourth(t) - fourth(ThermalGasK));
-  };
-  double low = std::min({ThermalMetalK, ThermalGasK, coolantK, surroundingsK});
-  double high = std::max({ThermalMetalK, ThermalGasK, coolantK, surroundingsK});
-  if (!nonnegative(rate) || !std::isfinite(residual(low)) || !std::isfinite(residual(high))) {
-    ThermalValid = false;
-    return;
-  }
-  if (rate + hg + hc + radiative + flame > 0.0) {
-    // Positive heat capacity/transfer give a monotone scalar backward-Euler
-    // equation. The bath/previous-state bracket prevents thermal overshoot.
-    for (int i = 0; i < 64; ++i) {
-      double middle = low + (high - low) * 0.5;
-      if (middle == low || middle == high) break;
-      if (residual(middle) > 0.0) high = middle;
-      else low = middle;
+  // Every solid uses the same bounded native solver, but retains its own
+  // bath, capacity, cooling, radiation and initialization/restoration state.
+  // Compute all candidates before committing, so invalid inputs cannot age only
+  // part of the engine. No temporary vector allocation occurs on each step.
+  const auto solve = [&](ThermalSolid& solid) -> bool {
+    solid.candidateAccepted = false;
+    const double capacity = solid.capacity->GetValue();
+    const double hg = solid.gasConductance->GetValue();
+    const double hc = solid.coolantConductance->GetValue();
+    const double area = solid.area->GetValue();
+    const double emissivity = solid.emissivity->GetValue();
+    const double gasK = value(solid.gasK, ThermalGasK);
+    const double coolantK = value(solid.coolantK, ambientK);
+    const double surroundingsK = value(solid.surroundingsK, ambientK);
+    const double flameArea = value(solid.flameArea, 0.0);
+    const double flameEmissivity = value(solid.flameEmissivity, 0.0);
+    const bool seedWarm = !solid.initialized && solid.warmPending;
+    const double initialK = seedWarm ? value(solid.initialMetalK, ambientK) : ambientK;
+    if (!(positive(capacity) && nonnegative(hg) && nonnegative(hc)
+          && nonnegative(area) && nonnegative(emissivity) && emissivity <= 1.0
+          && positive(gasK) && positive(coolantK) && positive(surroundingsK)
+          && positive(solid.temperature) && positive(initialK)
+          && nonnegative(flameArea) && nonnegative(flameEmissivity)
+          && flameEmissivity <= 1.0)) return false;
+    // Zero-time, artificial trim and executive suspension never initialize or
+    // age solids, even when the engine's cached input timestep is positive.
+    const double dt = in.TotalDeltaT;
+    if (dt <= 0.0 || FDMExec->IntegrationSuspended() || FDMExec->GetTrimStatus()) return true;
+    if (!positive(dt)) return false;
+    double previous = solid.temperature;
+    if (!solid.initialized && !solid.warmPending) previous = ambientK;
+    if (seedWarm && solid.initialMetalK) {
+      solid.candidateTemperature = initialK;
+      solid.candidateAccepted = true;
+      return true;
     }
-    ThermalMetalK = low + (high - low) * 0.5;
+    constexpr double sigma = 5.670374419e-8;
+    const double radiative = sigma * area * emissivity;
+    const double flame = AugmentationActive ? sigma * flameArea * flameEmissivity : 0.0;
+    const double rate = seedWarm ? 0.0 : capacity / dt;
+    const auto fourth = [](double t) { double t2 = t * t; return t2 * t2; };
+    const auto residual = [&](double t) {
+      return rate * (t - previous) + hg * (t - gasK)
+        + hc * (t - coolantK) + radiative * (fourth(t) - fourth(surroundingsK))
+        + flame * (fourth(t) - fourth(gasK));
+    };
+    double low = std::min({previous, gasK, coolantK, surroundingsK});
+    double high = std::max({previous, gasK, coolantK, surroundingsK});
+    if (!positive(previous) || !nonnegative(rate) || !std::isfinite(residual(low))
+        || !std::isfinite(residual(high))) return false;
+    if (rate + hg + hc + radiative + flame > 0.0) {
+      for (int i = 0; i < 64; ++i) {
+        double middle = low + (high - low) * 0.5;
+        if (middle == low || middle == high) break;
+        if (residual(middle) > 0.0) high = middle;
+        else low = middle;
+      }
+      previous = low + (high - low) * 0.5;
+    }
+    solid.candidateTemperature = previous;
+    solid.candidateAccepted = true;
+    return true;
+  };
+  ThermalValid = solve(ThermalWall);
+  for (const auto& region : p.regions)
+    ThermalValid = solve(*region) && ThermalValid;
+  if (!ThermalValid) {
+    ThermalGasK = std::numeric_limits<double>::quiet_NaN();
+    return;
   }
-  ThermalInitialized = true;
-  ThermalWarmPending = false;
+  if (ThermalWall.candidateAccepted)
+    ThermalWall.SetTemperature(ThermalWall.candidateTemperature);
+  for (const auto& region : p.regions)
+    if (region->candidateAccepted) region->SetTemperature(region->candidateTemperature);
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -890,6 +933,15 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
                          &FGTurbine::GetAfterburnerFuelFlowKgSec);
     PropertyManager->Tie(thermal + "afterburner-burned-fuel-flow-kg-sec", this,
                          &FGTurbine::GetAfterburnerBurnedFuelFlowKgSec);
+    for (auto& region : Thermal->regions) {
+      const string base = thermal + region->name + "/";
+      PropertyManager->Tie(base + "metal-temperature-k", region.get(),
+                           &ThermalSolid::GetTemperature);
+      PropertyManager->Tie(base + "metal-temperature-state-k", region.get(),
+                           &ThermalSolid::GetTemperature, &ThermalSolid::SetTemperature);
+      PropertyManager->Tie(base + "initialized", region.get(),
+                           &ThermalSolid::GetInitialized);
+    }
   }
 }
 
@@ -900,7 +952,11 @@ int FGTurbine::InitRunning(void)
   // This shortcut requests a warm initial operating point only before thermal
   // evolution/restoration. Seed on the first real step, after final IC inputs;
   // GetSteadyState's artificial trim dt must not age or initialize the wall.
-  if (Thermal && !ThermalInitialized) ThermalWarmPending = true;
+  if (Thermal) {
+    if (!ThermalWall.initialized) ThermalWall.warmPending = true;
+    for (auto& region : Thermal->regions)
+      if (!region->initialized) region->warmPending = true;
+  }
   FDMExec->SuspendIntegration();
   Cutoff=false;
   Running=true;
