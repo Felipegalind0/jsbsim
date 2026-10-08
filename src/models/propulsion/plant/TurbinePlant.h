@@ -131,6 +131,9 @@ struct ControllerConfig {
   double lightoffN2 = 0.15;        ///< physical fraction for igniter enable
   double starterCutoutN2 = 0.5;
   double runningN2Margin = 0.01;   ///< Running when N2 >= idle - margin (corrected)
+  /// Corrected N2 (N2 / sqrt(theta2)) at which the augmentor may be selected:
+  /// an operability limit, so it moves with inlet temperature. As a physical
+  /// speed it kept a full-power engine at altitude from ever selecting it.
   double abMinimumN2 = 0.95;
   double abLightoffFuelAirRatio = 0.005;
   double abRampRate = 0.02;        ///< fuel/air per second when lit

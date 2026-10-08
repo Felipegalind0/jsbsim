@@ -415,6 +415,29 @@ public:
   // contract: unburned augmentor fuel can at most leave at the jet velocity,
   // so until AB fuel burns the thrust exceeds that of the same attained state
   // without AB spray by no more than the spray's momentum.
+  void testAugmentorSelectableAtAColdInlet()
+  {
+    // At -50 C a full-power engine turns below the augmentor's minimum as a
+    // physical speed, but not as a corrected one, which is what the limit is.
+    Run run;
+    run.in.ambientTemperature = run.in.totalTemperature = 223.15;
+    run.in.ambientPressure = run.in.totalPressure = 30000.0;
+    TS_ASSERT(run.StartRunning(1.0));
+    run.in.augmentDemand = 1.0;
+    TS_ASSERT(run.For(5.0));
+    const PlantOutputs& o = run.plant.Outputs();
+    const double theta = std::sqrt(223.15 / 288.15);
+    TS_ASSERT_LESS_THAN(o.n2Percent / 100.0, run.plant.Config().control.abMinimumN2);
+    TS_ASSERT_LESS_THAN(run.plant.Config().control.abMinimumN2, o.n2Percent / 100.0 / theta);
+    TS_ASSERT(o.abSelected);
+    TS_ASSERT_LESS_THAN(0.0, o.abBurnedKgSec);
+    PlantInputs zero = run.in;
+    zero.advance = false;
+    TS_ASSERT(run.plant.Steady(zero));
+    TS_ASSERT(run.plant.Outputs().abSelected);
+    TS_ASSERT(!run.failed);
+  }
+
   void testAugmentorThrustNeedsBurnedFuel()
   {
     Run run;

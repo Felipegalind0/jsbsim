@@ -750,7 +750,7 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
   // Augmentor: selection is not burning; light-off flow, then a ramp when lit.
   const bool wasSelected = cs.abSelected;
   cs.abSelected = config_.augmented && fuelAllowed && in.augmentDemand > 0.0 && s.coreFlame.lit
-    && s.running && N2 >= c.abMinimumN2;
+    && s.running && N2c >= c.abMinimumN2;
   if (cs.abSelected != wasSelected) RecordEvent(time, cs.abSelected ? 7 : 8);
   if (!cs.abSelected) cs.abFuelAir = 0.0;
   else if (!s.abFlame.lit) cs.abFuelAir = c.abLightoffFuelAirRatio;
@@ -2232,7 +2232,7 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
     return true;
   };
   if (!reach()) return false;
-  if (config_.augmented && in.augmentDemand > 0.0 && !in.cutoff && y[kN2] >= c.abMinimumN2) {
+  if (config_.augmented && in.augmentDemand > 0.0 && !in.cutoff && y[kN2] / thetaNow() >= c.abMinimumN2) {
     from = to;
     to.abFuelAir = c.abFuelAirRatio(std::min(1.0, in.augmentDemand));
     if (!reach()) return false;
