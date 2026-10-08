@@ -11,7 +11,10 @@ set(SOURCES FGElectric.cpp
             FGTurboProp.cpp
             FGTransmission.cpp
             FGRotor.cpp
-            FGBrushLessDCMotor.cpp)
+            FGBrushLessDCMotor.cpp
+            plant/TurbinePlantGas.cpp
+            plant/TurbinePlantComponents.cpp
+            plant/TurbinePlant.cpp)
 
 set(HEADERS FGElectric.h
             FGEngine.h
@@ -28,6 +31,10 @@ set(HEADERS FGElectric.h
             FGRotor.h
             FGBrushLessDCMotor.h)
 
+set(PLANT_HEADERS plant/TurbinePlantGas.h
+                  plant/TurbinePlantComponents.h
+                  plant/TurbinePlant.h)
+
 add_library(Propulsion OBJECT ${SOURCES})
 
 if(CXXTEST_FOUND)
@@ -36,3 +43,5 @@ endif(CXXTEST_FOUND)
 
 install(FILES ${HEADERS} DESTINATION include/JSBSim/models/propulsion
                          COMPONENT devel)
+install(FILES ${PLANT_HEADERS} DESTINATION include/JSBSim/models/propulsion/plant
+                               COMPONENT devel)

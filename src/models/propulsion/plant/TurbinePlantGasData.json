@@ -1,0 +1,140 @@
+{
+  "artifact": "TurbinePlantGasData.inc",
+  "artifactSha256": "9191947fb6463a5657f314f1989ba0c5ef8fd4f2f926f753f3a1a3bea7f1ec73",
+  "domain": {
+    "maxK": 3500.0,
+    "minK": 200.0,
+    "outOfDomain": "inversions clamp to the domain and count a domain event; no extrapolation"
+  },
+  "generator": "utils/turbine_plant/generate_gas_data.py",
+  "generatorRevision": 1,
+  "generatorSha256": "6bd8f5145913f1567123d4e76cacba7f7d9a260ec65dad1dfa7bf2a2cf3a5b80",
+  "gridStepK": 10.0,
+  "interpolation": "cubic Hermite on a uniform grid; derivatives are the analytic polynomial derivatives (cp, dcp/dT, cp/T); 1000 K is a node",
+  "limits": [
+    "complete-combustion products; dissociation and minor species absent",
+    "ideal gas; no real-gas or condensed-phase effects",
+    "fits valid 200-3500 K (N2 and Ar fits from 300 K are used to 200 K)"
+  ],
+  "nodes": 331,
+  "pseudoSpecies": {
+    "air": {
+      "AR": 0.012882048212668045,
+      "CO2": 0.0004771106219027994,
+      "N2": 0.7552154709765241,
+      "O2": 0.23142537018890502
+    },
+    "fuel": "C12H23 surrogate, constant cp, configured per plant",
+    "products": {
+      "AR": 0.012059905220504522,
+      "CO2": 0.20189587293782854,
+      "H2O": 0.07902722806275522,
+      "N2": 0.7070169937789117
+    }
+  },
+  "reproduce": "python3 utils/turbine_plant/generate_gas_data.py",
+  "residentBytes": 21184,
+  "schema": 1,
+  "seed": 20261007,
+  "selfChecks": {
+    "janafCp": {
+      "AR": {
+        "1000.0": 7.53128947850179e-06,
+        "2000.0": 7.53128947850179e-06,
+        "298.15": 7.53128947850179e-06
+      },
+      "CO2": {
+        "1000.0": 0.0002368773589158657,
+        "2000.0": 0.00015084030181311547,
+        "298.15": 4.720822301740313e-06
+      },
+      "H2O": {
+        "1000.0": 0.000648059110643251,
+        "2000.0": 0.01117449774072643,
+        "298.15": -7.38635120214326e-05
+      },
+      "N2": {
+        "1000.0": 0.0019560178410897855,
+        "2000.0": 8.666263725753964e-06,
+        "298.15": -0.0018189917854095627
+      },
+      "O2": {
+        "1000.0": 0.00037208025198887107,
+        "2000.0": 0.0014679378461761594,
+        "298.15": 7.441003499653043e-05
+      }
+    },
+    "joins1000K": {
+      "AR": {
+        "cpRelative": 0.0,
+        "hRelative": 0.0,
+        "sRelative": 0.0
+      },
+      "CO2": {
+        "cpRelative": 1.4693956091116668e-09,
+        "hRelative": 3.8511831649310733e-10,
+        "sRelative": 1.5890651156641824e-09
+      },
+      "H2O": {
+        "cpRelative": 8.456465919703016e-10,
+        "hRelative": 2.5134739491482315e-09,
+        "sRelative": 9.430995482385824e-10
+      },
+      "N2": {
+        "cpRelative": 3.62657418893406e-07,
+        "hRelative": 2.42116251811391e-07,
+        "sRelative": 6.579204689518528e-08
+      },
+      "O2": {
+        "cpRelative": 8.104000150673783e-10,
+        "hRelative": 3.0379572634538653e-09,
+        "sRelative": 1.0504343995325646e-09
+      }
+    }
+  },
+  "sources": [
+    {
+      "name": "GRI-Mech 3.0 thermodynamic data (thermo30.dat)",
+      "url": "http://combustion.berkeley.edu/gri-mech/version30/text30.html",
+      "use": "NASA 7-coefficient fits for N2, O2, Ar, CO2, H2O"
+    },
+    {
+      "name": "McBride, Gordon, Reno, NASA TM-4513 (1993)",
+      "url": "https://ntrs.nasa.gov/citations/19940013151",
+      "use": "Polynomial form and reference state"
+    },
+    {
+      "name": "NIST-JANAF Thermochemical Tables",
+      "url": "https://janaf.nist.gov/",
+      "use": "Heat-capacity transcription checks only"
+    },
+    {
+      "name": "U.S. Standard Atmosphere 1976",
+      "url": "https://ntrs.nasa.gov/citations/19770009539",
+      "use": "Dry-air composition of the modeled species"
+    }
+  ],
+  "stoichiometricFuelAirRatio": 0.0681715964704016,
+  "units": {
+    "T": "K",
+    "cp": "J/kg/K",
+    "h": "J/kg sensible, datum 298.15 K",
+    "phi": "J/kg/K standard-state entropy function"
+  },
+  "validation": {
+    "design": "cell midpoints plus seeded uniform random points; no node is a validation point",
+    "heldOutPoints": 4330,
+    "maxAbsoluteError": {
+      "air": {
+        "cpAbsJPerKgK": 0.010699172408976665,
+        "hAbsJPerKg": 0.14058771601412445,
+        "phiAbsJPerKgK": 0.0004023835062980652
+      },
+      "products": {
+        "cpAbsJPerKgK": 0.00999699349790717,
+        "hAbsJPerKg": 0.13416094647254795,
+        "phiAbsJPerKgK": 0.0003794294552790234
+      }
+    }
+  }
+}
