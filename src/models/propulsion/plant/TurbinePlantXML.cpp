@@ -205,6 +205,7 @@ PlantConfig ReadPlantConfig(Element* plant, NumericalSettings& settings)
   Number(d, "combustor-hot-loss-fraction", s.combustorHotLossFraction);
   Number(d, "bypass-pressure-loss", s.bypassPressureLoss);
   Number(d, "mixer-pressure-loss", s.mixerPressureLoss);
+  Number(d, "mixer-static-pressure-ratio", s.mixerStaticRatio);
   Number(d, "augmentor-dry-pressure-loss", s.augmentorDryPressureLoss);
   Number(d, "augmentor-hot-loss-coefficient", s.augmentorHotLossCoefficient);
   Number(d, "combustion-efficiency", s.designCombustionEfficiency);
@@ -245,6 +246,8 @@ PlantConfig ReadPlantConfig(Element* plant, NumericalSettings& settings)
   Number(k, "idle-gain", ctl.idleGain);
   Number(k, "max-n2", ctl.maxN2);
   Number(k, "max-n2-gain", ctl.maxN2Gain);
+  Number(k, "max-n1", ctl.maxN1);
+  Number(k, "max-n1-gain-per-sec", ctl.maxN1Gain);
   Number(k, "max-turbine-exit-temperature-k", ctl.maxTurbineExitK);
   Number(k, "temperature-gain", ctl.temperatureGain);
   Number(k, "lightoff-n2", ctl.lightoffN2);
@@ -254,6 +257,10 @@ PlantConfig ReadPlantConfig(Element* plant, NumericalSettings& settings)
   Number(k, "augmentor-lightoff-fuel-air-ratio", ctl.abLightoffFuelAirRatio);
   Number(k, "augmentor-ramp-rate-per-sec", ctl.abRampRate);
   Number(k, "augmentor-preopen-fraction", ctl.abPreopenFraction);
+  Number(k, "lift-throat-area-factor", ctl.liftThroatAreaFactor);
+  Number(k, "lift-split-gain-per-sec", ctl.liftSplitGain);
+  Number(k, "lift-split-washout-per-sec", ctl.liftSplitWashout);
+  Number(k, "lift-vane-min", ctl.liftVaneMin);
   Number(k, "throat-area-min-fraction", ctl.throatAreaMin);
   Number(k, "throat-area-max-fraction", ctl.throatAreaMax);
   Number(k, "throat-area-rate-per-sec", ctl.throatAreaRate);
@@ -315,6 +322,7 @@ PlantConfig ReadPlantConfig(Element* plant, NumericalSettings& settings)
     Number(l, "roll-post-discharge-coefficient", lift.rollPostDischarge);
     Number(l, "roll-post-velocity-coefficient", lift.rollPostVelocityCoefficient);
     Number(l, "roll-post-rate-per-sec", lift.rollPostRate);
+    Number(l, "bypass-entry-area-factor", lift.bypassEntryAreaFactor);
   }
 
   if (Element* n = plant->FindElement("numerics")) {

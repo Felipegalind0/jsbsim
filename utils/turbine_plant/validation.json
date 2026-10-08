@@ -49,6 +49,26 @@
     "work_bound": {
       "definition": "Newton iterations per accepted step, every solve and fallback included",
       "gate": "<= settings iteration-cap (default 16)"
+    },
+    "mixer_conservation": {
+      "definition": "momentum mixer with a calorically perfect gas: relative error of mixed mass, total enthalpy and impulse (W V + Ps A) against the entering streams; uniform streams at one flux mix without loss; mixed entropy is at least the mass-weighted entering entropy",
+      "gate": 1e-9,
+      "test": "FGTurbinePlantTest::testMomentumMixerConservesMassEnergyAndMomentum"
+    },
+    "steady_off_design": {
+      "definition": "steady start at 1500 m, Mach 0.4, throttle 0.7, against the same engine after 10 s of transient",
+      "gate": {"n1_percent_points": 0.05, "force_fraction": 2e-3},
+      "test": "FGTurbinePlantTest::testSteadyStartAwayFromTheDesignAmbient"
+    },
+    "thrust_split": {
+      "definition": "lift-fan over main-nozzle gross thrust against the command after 10 s (vanes with the throat at its minimum; throat with the vanes open), the steady solve at the same inputs, and the error remaining 0.5 s after a cut in the command",
+      "gate": {"vane_mode": 1e-3, "throat_mode": 0.01, "steady": 1e-6, "cut_remaining_fraction": 0.3},
+      "test": "FGTurbinePlantTest::testThrustSplitIsHeldByGuideVanesAndThroat"
+    },
+    "lp_speed_limit": {
+      "definition": "N1 excess over a limit 0.4 points above the running N1 while the lift-fan door closes with the split following it, with and without the limit",
+      "gate": "limited excess < 0.5 x unlimited excess",
+      "test": "FGTurbinePlantTest::testLpSpeedLimitHoldsWhileTheFanUnloads"
     }
   }
 }

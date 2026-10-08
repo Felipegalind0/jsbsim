@@ -179,6 +179,42 @@ public:
     TS_ASSERT_DELTA(z.Tt, a.Tt, 1e-9);
   }
 
+  void testMomentumMixerConservesMassEnergyAndMomentum()
+  {
+    const GasProperties g = PerfectAir();
+    const double cp = 1004.5, R = 287.0;
+    const MixerGeometry geometry{0.25, 0.12};
+    const double area = geometry.coreArea + geometry.bypassArea;
+    // Uniform streams at one flux mix without loss.
+    const Stream core = AirStream(g, 60.0, 700.0, 2.5e5);
+    const Stream matched = AirStream(g, 60.0 * geometry.bypassArea / geometry.coreArea, 700.0, 2.5e5);
+    const MixerResult uniform = MixAtStaticPressure(g, core, matched, geometry);
+    TS_ASSERT(uniform.valid);
+    TS_ASSERT_LESS_THAN(RelativeError(uniform.out.Pt, core.Pt), 1e-9);
+    TS_ASSERT_DELTA(uniform.out.Tt, core.Tt, 1e-9);
+    TS_ASSERT_LESS_THAN(RelativeError(uniform.bypassRequiredPt, matched.Pt), 1e-9);
+    // Unequal streams: mass, energy and impulse are conserved and entropy rises.
+    const Stream hot = AirStream(g, 60.0, 900.0, 2.5e5), cold = AirStream(g, 20.0, 400.0, 2.7e5);
+    const MixerResult m = MixAtStaticPressure(g, hot, cold, geometry);
+    TS_ASSERT(m.valid);
+    TS_ASSERT_DELTA(m.out.W, 80.0, 1e-12);
+    TS_ASSERT_LESS_THAN(RelativeError(m.out.ht, (60.0 * hot.ht + 20.0 * cold.ht) / 80.0), 1e-12);
+    double x, Ts, V;
+    TS_ASSERT(SubsonicStaticState(g, hot, geometry.coreArea, x, Ts, V));
+    const double Ps = x * hot.Pt;
+    TS_ASSERT_LESS_THAN(RelativeError(m.staticPressure, Ps), 1e-12);
+    NozzleGeometry entry;
+    entry.throatArea = entry.exitArea = geometry.bypassArea;
+    NozzleResult jet;
+    TS_ASSERT(NozzleThrust(g, cold, entry, Ps, jet));
+    const double impulseIn = hot.W * V + jet.grossThrust + Ps * area;
+    double xo, To, Vo;
+    TS_ASSERT(SubsonicStaticState(g, m.out, area, xo, To, Vo));
+    TS_ASSERT_LESS_THAN(RelativeError(m.out.W * Vo + xo * m.out.Pt * area, impulseIn), 1e-9);
+    const auto entropy = [&](const Stream& st) { return cp * std::log(st.Tt) - R * std::log(st.Pt); };
+    TS_ASSERT_LESS_THAN(60.0 * entropy(hot) + 20.0 * entropy(cold), 80.0 * entropy(m.out));
+  }
+
   void testConvergentNozzleChokedAnalytic()
   {
     const GasProperties g = PerfectAir();
@@ -314,6 +350,22 @@ public:
     TS_ASSERT(run.For(10.0));
     TS_ASSERT_LESS_THAN(RelativeError(run.plant.Outputs().nozzle.grossThrust, idleThrust), 2e-3);
     TS_ASSERT_DELTA(run.plant.Outputs().n2Percent, idleN2, 0.05);
+  }
+
+  void testSteadyStartAwayFromTheDesignAmbient()
+  {
+    // 1500 m at Mach 0.4: the steady solve continues from the design point
+    // across flight condition and must agree with the settled transient.
+    Run run;
+    const double p0 = 84556.0, T0 = 278.4, M = 0.4, ram = 1.0 + 0.2 * M * M;
+    run.in.ambientPressure = p0; run.in.ambientTemperature = T0;
+    run.in.mach = M; run.in.airspeed = M * std::sqrt(1.4 * 287.05 * T0);
+    run.in.totalTemperature = T0 * ram; run.in.totalPressure = p0 * std::pow(ram, 3.5);
+    TS_ASSERT(run.StartRunning(0.7));
+    const double n1 = run.plant.Outputs().n1Percent, thrust = run.plant.Outputs().nozzle.grossThrust;
+    TS_ASSERT(run.For(10.0));
+    TS_ASSERT_DELTA(run.plant.Outputs().n1Percent, n1, 0.05);
+    TS_ASSERT_LESS_THAN(RelativeError(run.plant.Outputs().nozzle.grossThrust, thrust), 2e-3);
   }
 
   void testColdStartToAfterburnerConservesMassAndEnergy()
@@ -617,8 +669,90 @@ public:
                     o.station[kSt13].W - o.station[kSt16].W, 1e-9);
     TS_ASSERT_DELTA(o.netThrustN, o.nozzle.grossThrust + o.liftFan.grossThrust
                     + o.rollPost[0].grossThrust + o.rollPost[1].grossThrust - o.ramDragN, 1e-6);
+    TS_ASSERT_DELTA(o.ramDragN, o.inletRamDragN + o.liftFanRamDragN, 1e-9);
     TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
     TS_ASSERT_LESS_THAN_EQUALS(run.worstMass, 1e-6);
+  }
+
+  void testThrustSplitIsHeldByGuideVanesAndThroat()
+  {
+    Run run(true);
+    TS_ASSERT(run.StartRunning(0.9));
+    run.in.clutchCommand = 1.0;
+    run.in.doorCommand = 1.0;
+    run.in.rollPostCommand = {{1.0, 1.0}};
+    const auto ratio = [&run]() {
+      const PlantOutputs& o = run.plant.Outputs();
+      return o.liftFan.grossThrust / o.nozzle.grossThrust;
+    };
+    // Below the split the fan gives with the throat at its minimum, the
+    // guide vanes take out the rest; the steady solve finds the same point.
+    run.in.liftSplit = 0.3;
+    TS_ASSERT(run.For(10.0));
+    TS_ASSERT_DELTA(ratio(), 0.3, 1e-3);
+    const double vane = run.plant.State().control.splitVane;
+    TS_ASSERT_LESS_THAN(vane, 0.95);
+    TS_ASSERT_LESS_THAN(RelativeError(run.plant.Outputs().throatArea, run.plant.Design().throatMin), 1e-9);
+    PlantInputs zero = run.in;
+    zero.advance = false;
+    TS_ASSERT(run.plant.Steady(zero));
+    TS_ASSERT_DELTA(ratio(), 0.3, 1e-6);
+    TS_ASSERT_DELTA(run.plant.State().control.splitVane, vane, 0.01);
+    // Inside the throat range the vanes reopen and the throat holds the split.
+    run.in.liftSplit = 0.42;
+    TS_ASSERT(run.For(10.0));
+    TS_ASSERT_DELTA(ratio(), 0.42, 0.01);
+    TS_ASSERT_LESS_THAN(0.99, run.plant.State().control.splitVane);
+    zero = run.in;
+    zero.advance = false;
+    TS_ASSERT(run.plant.Steady(zero));
+    TS_ASSERT_DELTA(ratio(), 0.42, 1e-6);
+    TS_ASSERT_EQUALS(run.plant.State().control.splitVane, 1.0);
+    // A cut in the split is taken at once by the vanes, not the spool.
+    run.in.liftSplit = 0.37;
+    TS_ASSERT(run.For(0.5));
+    TS_ASSERT_LESS_THAN(std::fabs(ratio() - 0.37), 0.3 * 0.05);
+    TS_ASSERT_LESS_THAN(run.plant.State().control.splitVane, 1.0);
+    TS_ASSERT(!run.failed);
+    TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
+    TS_ASSERT_LESS_THAN_EQUALS(run.worstMass, 1e-6);
+  }
+
+  void testLpSpeedLimitHoldsWhileTheFanUnloads()
+  {
+    // Closing the lift-fan door with the split following it unloads the LP
+    // spool faster than fuel can answer; the limit gives the fan its load
+    // back and closes the throat.
+    constexpr double kMargin = 0.004;
+    double peak[2];
+    for (int k = 0; k < 2; ++k) {
+      PlantConfig cfg = Synthetic(true);
+      Run run(true);
+      run.plant.Load(cfg);
+      TS_ASSERT(run.StartRunning(0.9));
+      run.in.clutchCommand = 1.0;
+      run.in.doorCommand = 1.0;
+      run.in.liftSplit = 0.42;
+      TS_ASSERT(run.For(8.0));
+      const double n1 = run.plant.Outputs().n1Percent / 100.0;
+      if (k == 1) {
+        cfg.control.maxN1 = n1 + kMargin;
+        PlantState keep = run.plant.State();
+        run.plant.Load(cfg);
+        TS_ASSERT(run.plant.RestoreState(keep));
+      }
+      peak[k] = 0.0;
+      run.in.doorCommand = 0.0;
+      for (int i = 0; i < 240 && !run.failed; ++i) {
+        run.in.liftSplit = 0.42 * run.plant.State().door;
+        run.Step();
+        peak[k] = std::max(peak[k], run.plant.Outputs().n1Percent / 100.0 - n1);
+      }
+      TS_ASSERT(!run.failed);
+      TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
+    }
+    TS_ASSERT_LESS_THAN(2.0 * kMargin, peak[0]);
+    TS_ASSERT_LESS_THAN(peak[1] - kMargin, 0.5 * (peak[0] - kMargin));
   }
 
   void testSettingsBounds()

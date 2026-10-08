@@ -123,7 +123,9 @@ struct ControllerConfig {
   double idleCorrectedN2 = 0.6;
   double idleGain = 5.0;
   double maxN2 = 1.05;             ///< physical fraction
-  double maxN2Gain = 20.0;
+  /// The N2 limit shares the governor integrator; the HP spool answers fuel
+  /// fast, so a gain much above 10 limit-cycles against the N1 loop.
+  double maxN2Gain = 5.0;
   double maxTurbineExitK = 1e9;    ///< station 5 limit
   double temperatureGain = 0.01;   ///< ratio units per K
   double lightoffN2 = 0.15;        ///< physical fraction for igniter enable
@@ -133,6 +135,16 @@ struct ControllerConfig {
   double abLightoffFuelAirRatio = 0.005;
   double abRampRate = 0.02;        ///< fuel/air per second when lit
   double abPreopenFraction = 0.05;
+  /// Throat area multiplier with the lift fan fully loaded (clutch engaged,
+  /// nozzle door open; it scales with their product): opening the nozzle
+  /// lowers turbine back pressure so the LP turbine can drive the fan.
+  double liftThroatAreaFactor = 1.0;
+  double liftSplitGain = 12.0;     ///< 1/s, thrust-split loop on relative split error
+  double liftSplitWashout = 1.0;   ///< 1/s, rate at which the throat takes over from closed vanes
+  double liftVaneMin = 0.4;        ///< lowest guide-vane work multiplier
+  /// LP speed limit (physical fraction) held with the lift fan engaged by
+  /// opening the vanes and closing the throat; per second per unit excess.
+  double maxN1 = 1e9, maxN1Gain = 100.0;
   double throatAreaMin = 0.0, throatAreaMax = 0.0; ///< fractions of the design throat area
   double throatAreaRate = 0.5;     ///< design throat areas per second
   double throatAreaTimeConstant = 0.1;
@@ -171,6 +183,12 @@ struct LiftSystemConfig {
   double rollPostDischarge = 0.95;
   double rollPostVelocityCoefficient = 0.97;
   double rollPostRate = 2.0;       ///< fraction per second
+  /// Bypass entry area into the mixer at full clutch engagement, as a
+  /// fraction of its design area. A declared surrogate for however the real
+  /// engine holds its fan operating line while the nozzle opens in lift mode:
+  /// a smaller entry chokes the bypass stream, so fan pressure and core
+  /// supercharge stay up as turbine exit pressure falls. 1 disables it.
+  double bypassEntryAreaFactor = 1.0;
 };
 
 struct DesignSpec {
@@ -187,6 +205,9 @@ struct DesignSpec {
   double coolingFraction = 0.0;
   double combustorPressureLoss = 0.05, combustorHotLossFraction = 0.3;
   double bypassPressureLoss = 0.02, mixerPressureLoss = 0.01;
+  /// Design static/total pressure ratio of the core stream at the mixing
+  /// plane (0.95 is about Mach 0.27); sizes the core and bypass entry areas.
+  double mixerStaticRatio = 0.95;
   double augmentorDryPressureLoss = 0.03, augmentorHotLossCoefficient = 0.03;
   double designCombustionEfficiency = 0.995;
   double accessoryPower = 0.0;     ///< W on the HP shaft at design speed
@@ -230,6 +251,7 @@ struct DerivedDesign {
   double compressorPressureRatio = 0.0;
   double loading = 0.0;            ///< design combustor loading parameter
   double gaugeRatio = 0.0;         ///< design Pt7/p0 - 1: pressure residual scale
+  MixerGeometry mixerGeometry;     ///< core and bypass entry areas at the mixing plane
   double bypassCoolantFlow = 0.0, coolingFlow = 0.0;
   std::array<double, kStationCount> stationPt{}, stationTt{}, stationW{};
   bool valid = false;
@@ -256,6 +278,9 @@ struct ControllerState {
   double egtGaugeK = 0.0;
   double sensedP3 = 0.0, sensedT5 = 0.0, sensedT6 = 0.0, sensedT7 = 0.0;
   double sensedW3b = 0.0, sensedAir6 = 0.0, sensedW6 = 0.0;
+  double sensedMainThrust = 0.0, sensedLiftThrust = 0.0; ///< N, gross
+  double splitTrim = 1.0;      ///< nozzle area multiplier held by the thrust-split loop
+  double splitVane = 1.0;      ///< lift-fan guide-vane work multiplier (fast split effector), 1 open
   int limiter = 0;             ///< 0 N1, 1 accel, 2 decel, 3 N2 max, 4 T5 max, 5 idle, 6 start, 7 off
 };
 
@@ -299,6 +324,14 @@ struct PlantInputs {
   bool fuelFrozen = false;
   double clutchCommand = 0.0, doorCommand = 0.0;
   std::array<double, 2> rollPostCommand{{0.0, 0.0}};
+  /// Multiplies the scheduled throat area (an open-loop nozzle trim).
+  double throatAreaTrim = 1.0;
+  /// Commanded ratio of lift-fan to main-nozzle gross thrust while the lift
+  /// fan is engaged. The controller holds it with two effectors: lift-fan
+  /// guide vanes act at once (they can only reduce fan thrust), and the
+  /// throat area follows, shifting LP turbine work between the lift fan and
+  /// the jet until the vanes are open again. 0 disables.
+  double liftSplit = 0.0;
 };
 
 /** Solver controls exposed to the application; one home per setting. */
@@ -345,7 +378,8 @@ struct NumericalStatus {
   int iterations = 0, residualEvaluations = 0, substeps = 0;
   double maxResidual = 0.0;
   bool converged = false;
-  int fallbackReason = 0;      ///< 0 none, 1 iteration cap, 2 domain, 3 nonfinite, 4 budget
+  int fallbackReason = 0;      ///< 0 none, 1 iteration cap, 2 domain, 3 nonfinite, 4 budget, 5 no steady point (zero-time)
+  double nozzleBackoff = 1.0;  ///< 1 normally; below 1 while the nozzle command is being held back
   bool failure = false;        ///< latched numerical failure; outputs invalid
   unsigned long domainClamps = 0;
   double residentBytes = 0.0;
@@ -364,6 +398,7 @@ struct PlantOutputs {
   std::array<OutletObservation, 2> rollPost{};
   double throatArea = 0.0, exitArea = 0.0, nozzlePosition = 0.0;
   double ramDragN = 0.0, capturedAirKgSec = 0.0, netThrustN = 0.0;
+  double inletRamDragN = 0.0, liftFanRamDragN = 0.0; ///< parts of ramDragN, at each inlet
   double n1Percent = 0.0, n2Percent = 0.0, liftFanPercent = 0.0;
   double lpTurbineTorque = 0.0, fanTorque = 0.0, hpTurbineTorque = 0.0, compressorTorque = 0.0;
   double clutchTorque = 0.0, liftFanTorque = 0.0, liftFanPowerW = 0.0, starterTorque = 0.0;
@@ -458,6 +493,11 @@ private:
   double flowSpeedLP_ = 0.0, flowSpeedHP_ = 0.0;  ///< speeds of the stored warm-start flows
   bool lastStarved_ = false;
   bool bypassBlocked_ = false;   ///< mixer junction regime of the stored solution
+  /// Fraction of the commanded nozzle move taken this step: quartered after
+  /// a step that could not be solved, doubled after each accepted one, so a
+  /// nozzle commanded beyond where the gas path has a solution stops there
+  /// instead of freezing the engine.
+  double nozzleBackoff_ = 1.0;
   // Preallocated working storage: no allocation on an accepted step.
   PlantState trial_, retry_, previous_;
   Ledger stepLedger_;
@@ -493,7 +533,7 @@ bool ValidSettings(const NumericalSettings& settings);
     (K) and an initialized flag for each solid. Booleans are 0 or 1. The
     record carries the warm-start flows so a restored step starts where the
     captured one would have. */
-constexpr int kStateFixedFields = 42;
+constexpr int kStateFixedFields = 46;
 inline int StateRecordSize(std::size_t solids) { return kStateFixedFields + 2 * static_cast<int>(solids); }
 const char* StateRecordName(int index);
 void PackState(const PlantState& state, double* record);

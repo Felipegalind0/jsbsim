@@ -207,6 +207,7 @@ struct Plant::Operating {
   double throatArea = 0.0, exitArea = 0.0;
   std::array<double, 2> rollPostArea{{0.0, 0.0}};
   double door = 0.0, clutch = 0.0, starterTorque = 0.0;
+  double liftVane = 1.0;      ///< lift-fan guide-vane work multiplier
   std::array<double, kMaxSolids> solidK{};
   int solidCount = 0;
   double liftFlowGuess = 0.0;
@@ -292,7 +293,7 @@ bool Plant::DeriveDesign()
 
   // Builds the design chain for a fan pressure ratio and a mass flow; returns
   // Pt5 - Pt16 (mixer total-pressure imbalance) and stores maps and stations.
-  const auto chain = [&](double prf, double W2, double& imbalance) -> bool {
+  const auto chain = [&](double prf, double W2, double& imbalance, bool balanced) -> bool {
     const double prc = d.fanPressureRatio > 1.0 && d.compressor.pressureRatio > 1.0
       ? d.compressor.pressureRatio : d.overallPressureRatio / prf;
     Stream s2 = AmbientStream(gas, d.ambientPressure * d.inletRecovery, d.ambientTemperature, W2);
@@ -374,7 +375,7 @@ bool Plant::DeriveDesign()
       map.peakEfficiency = spec.efficiency;
       const double c0 = std::sqrt(2.0 * dhIs);
       map.radius = spec.velocityRatio * c0 / omega;
-      const TurbineResult check = Expand(gas, map, in, omega);
+      const TurbineResult check = ExpandAt(gas, map, in, omega, pr);
       outStream = check.out;
       torque = check.torque;
       return check.valid && std::fabs(check.dh / dh - 1.0) < 1e-8;
@@ -398,6 +399,20 @@ bool Plant::DeriveDesign()
     imbalance = s5.Pt - s16.Pt;
     Stream s6 = Mix(gas, s5, s16, none, mixOk);
     if (!mixOk) return false;
+    if (balanced) {
+      // Size the mixing plane at the design static pressure and mix there;
+      // the trial points of the fan-ratio search only need the imbalance.
+      double flux, Ts, V;
+      const double x5 = d.mixerStaticRatio;
+      if (!(x5 > 0.5 && x5 < 1.0) || !FluxParameter(gas, s5.c, s5.Tt, x5, flux, Ts, V)) return false;
+      out.mixerGeometry.coreArea = s5.W / (s5.Pt * flux);
+      const double x16 = std::min(0.999, x5 * s5.Pt / s16.Pt);
+      if (!FluxParameter(gas, s16.c, s16.Tt, x16, flux, Ts, V)) return false;
+      out.mixerGeometry.bypassArea = s16.W > 0.0 ? s16.W / (s16.Pt * flux) : 0.0;
+      const MixerResult mixed = MixAtStaticPressure(gas, s5, s16, out.mixerGeometry);
+      if (!mixed.valid) return false;
+      s6 = mixed.out;
+    }
     out.mixer.designCapacity = s6.W * std::sqrt(s6.Tt) / s6.Pt;
     out.mixer.cold = d.mixerPressureLoss;
     s6.Pt *= 1.0 - d.mixerPressureLoss;
@@ -453,21 +468,21 @@ bool Plant::DeriveDesign()
     // Mixer total-pressure balance determines the fan pressure ratio.
     double lo = 1.05, hi = std::max(1.1, d.overallPressureRatio / 2.0);
     double flo, fhi;
-    if (!chain(lo, W2, flo) || !chain(hi, W2, fhi) || flo * fhi > 0.0)
+    if (!chain(lo, W2, flo, false) || !chain(hi, W2, fhi, false) || flo * fhi > 0.0)
       return fail("mixer balance has no fan pressure ratio in range; check bypass ratio and turbine inlet temperature");
     for (int i = 0; i < 200 && hi - lo > 1e-12 * hi; ++i) {
       const double mid = 0.5 * (lo + hi);
       double fm;
-      if (!chain(mid, W2, fm)) return fail("design chain failed during the mixer balance");
+      if (!chain(mid, W2, fm, false)) return fail("design chain failed during the mixer balance");
       if ((fm < 0.0) == (flo < 0.0)) { lo = mid; flo = fm; } else hi = mid;
     }
     prf = 0.5 * (lo + hi);
   }
-  if (!chain(prf, W2, imbalance)) return fail("design chain failed");
+  if (!chain(prf, W2, imbalance, true)) return fail("design chain failed");
   if (!(d.massFlow > 0.0)) {
     if (!(d.designThrust > 0.0)) return fail("design requires a mass flow or a thrust");
     W2 *= d.designThrust / out.thrust;     // every extensive quantity scales with flow
-    if (!chain(prf, W2, imbalance)) return fail("design chain failed after sizing");
+    if (!chain(prf, W2, imbalance, true)) return fail("design chain failed after sizing");
   }
   // Lift fan surrogate at its own design speed.
   if (config_.lift.present) {
@@ -540,6 +555,7 @@ void Plant::InitializeCold(double ambientTemperature)
   sequence_ = 0.0;
   jacobianValid_ = endJacobianValid_ = false;
   bypassBlocked_ = true;   // at rest the open regime leaves bypass flow undetermined
+  nozzleBackoff_ = 1.0;
   flowSpeedLP_ = flowSpeedHP_ = 0.0;
   lastAccelLP_ = lastAccelHP_ = 0.0;
   out_.ledger = Ledger();
@@ -589,6 +605,7 @@ bool Plant::RestoreState(const PlantState& s, std::string* reason)
   lastStarterTorque_ = 0.0;
   lastStarved_ = false;
   jacobianValid_ = endJacobianValid_ = false;
+  nozzleBackoff_ = 1.0;
   out_.status.failure = false;
   return true;
 }
@@ -615,7 +632,8 @@ const char* const kStateNames[kStateFixedFields] = {
   "control-igniter", "control-egt-gauge-k", "sensed-p3-pa", "sensed-t5-k", "sensed-t6-k",
   "sensed-t7-k", "sensed-w3b-kg-sec", "sensed-air6-kg-sec", "sensed-w6-kg-sec",
   "control-limiter", "running", "starter", "fuel-used-kg",
-  "warm-start-0", "warm-start-1", "warm-start-2", "warm-start-3", "warm-start-4", "warm-start-5"};
+  "warm-start-0", "warm-start-1", "warm-start-2", "warm-start-3", "warm-start-4", "warm-start-5",
+  "sensed-main-thrust-n", "sensed-lift-thrust-n", "control-split-trim", "control-split-vane"};
 } // namespace
 
 const char* StateRecordName(int index)
@@ -634,7 +652,8 @@ void PackState(const PlantState& s, double* r)
     s.throatArea, c.integrator, c.abFuelAir, c.abSelected ? 1.0 : 0.0, c.igniter ? 1.0 : 0.0,
     c.egtGaugeK, c.sensedP3, c.sensedT5, c.sensedT6, c.sensedT7, c.sensedW3b, c.sensedAir6,
     c.sensedW6, static_cast<double>(c.limiter), s.running ? 1.0 : 0.0, s.starter ? 1.0 : 0.0,
-    s.fuelUsedKg, s.flows[0], s.flows[1], s.flows[2], s.flows[3], s.flows[4], s.flows[5]};
+    s.fuelUsedKg, s.flows[0], s.flows[1], s.flows[2], s.flows[3], s.flows[4], s.flows[5],
+    c.sensedMainThrust, c.sensedLiftThrust, c.splitTrim, c.splitVane};
   std::memcpy(r, fixed, sizeof(fixed));
   for (std::size_t i = 0; i < s.solids.size(); ++i) {
     r[kStateFixedFields + 2 * i] = s.solids[i].temperature;
@@ -669,6 +688,8 @@ bool UnpackState(const double* r, std::size_t solids, PlantState& s)
   if (!flag(33, s.running) || !flag(34, s.starter)) return false;
   s.fuelUsedKg = r[35];
   for (int i = 0; i < 6; ++i) s.flows[i] = r[36 + i];
+  c.sensedMainThrust = r[42]; c.sensedLiftThrust = r[43]; c.splitTrim = r[44]; c.splitVane = r[45];
+  if (!(c.splitTrim > 0.0 && c.splitVane > 0.0 && c.splitVane <= 1.0)) return false;
   s.solids.resize(solids);
   for (std::size_t i = 0; i < solids; ++i) {
     s.solids[i].temperature = r[kStateFixedFields + 2 * i];
@@ -715,6 +736,14 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
     else if (ru < lo) { ru = lo; limiter = 2; }
     if (limiter == 1 || limiter == 2) cs.integrator = ru - c.proportionalGain * e;  // back-calculation
     else cs.integrator += c.integralGain * e * dt;
+    // Back-calculation leaves a command riding a limit just inside it on
+    // alternate steps; keep the limit label until the command is clearly
+    // inside, so the reported limiter does not flicker. Label only.
+    if (limiter != 1 && limiter != 2) {
+      const double band = 0.02 * std::max(std::fabs(hi), std::fabs(lo));
+      if (cs.limiter == 1 && ru >= hi - band) limiter = 1;
+      else if (cs.limiter == 2 && ru <= lo + band) limiter = 2;
+    }
     cs.limiter = limiter;
     coreCmd = std::max(0.0, ru) * design_.ratioUnit * P3;
   }
@@ -733,6 +762,44 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
   abCmd = cs.abFuelAir * std::max(0.0, cs.sensedW6);
   // Nozzle: dry schedule, pre-open on selection, constant corrected flow when lit.
   double area = design_.throatArea * c.dryThroatArea(N1c);
+  // The lift-mode opening follows the fan's load (clutch and nozzle door),
+  // so the LP turbine is unloaded together with the fan, not after it.
+  area *= (1.0 + (c.liftThroatAreaFactor - 1.0) * s.clutch * s.door) * std::clamp(in.throatAreaTrim, 0.5, 2.0);
+  // Thrust split: with the lift fan delivering, trim the throat so that
+  // lift-fan thrust is the commanded multiple of main-nozzle thrust. Closing
+  // the nozzle raises jet thrust and takes work from the LP turbine. The
+  // trim is held inside the area limits (no windup) and relaxes when idle.
+  const double liftScale = std::max(1.0, design_.thrust);
+  const bool splitActive = config_.lift.present && in.liftSplit > 0.0 && s.clutch > 0.5
+    && cs.sensedLiftThrust > 0.02 * liftScale && cs.sensedMainThrust > 0.0;
+  if (splitActive) {
+    const double wanted = in.liftSplit * cs.sensedMainThrust;
+    const double error = (cs.sensedLiftThrust - wanted) / (cs.sensedLiftThrust + wanted);
+    const double step = std::exp(-c.liftSplitGain * error * dt);
+    // The guide vanes act at once in either direction while they have
+    // travel; with them fully open, a fan that is too weak is met by opening
+    // the throat. Closed vanes are washed out by closing the throat, which
+    // raises jet thrust until the vanes are open again or the throat is at
+    // its minimum.
+    if (error > 0.0 || cs.splitVane < 1.0) cs.splitVane *= step;
+    else cs.splitTrim *= step;
+    // LP overspeed while the fan is unloading (a closing conversion): give
+    // the fan its load back and close the throat, which takes power off the
+    // LP turbine faster than fuel can.
+    const double overspeed = std::max(0.0, N1 - c.maxN1);
+    if (overspeed > 0.0) {
+      cs.splitVane *= std::exp(c.maxN1Gain * overspeed * dt);
+      cs.splitTrim *= std::exp(-c.maxN1Gain * overspeed * dt);
+    }
+    cs.splitVane = std::clamp(cs.splitVane, c.liftVaneMin, 1.0);
+    cs.splitTrim *= std::exp(-c.liftSplitWashout * (1.0 - cs.splitVane) * dt);
+    cs.splitTrim = std::clamp(cs.splitTrim, design_.throatMin / area, design_.throatMax / area);
+  } else {
+    const double relax = -std::expm1(-dt / 0.5);
+    cs.splitTrim += (1.0 - cs.splitTrim) * relax;
+    cs.splitVane += (1.0 - cs.splitVane) * relax;
+  }
+  area *= cs.splitTrim;
   if (cs.abSelected) area *= 1.0 + c.abPreopenFraction;
   if (s.abFlame.lit && cs.sensedT6 > 0.0 && cs.sensedT7 > cs.sensedT6)
     area *= std::sqrt(cs.sensedT7 / cs.sensedT6);
@@ -911,16 +978,25 @@ bool Plant::EvaluatePath(const Operating& op, const double* x, GasPath& g, doubl
   const double n1 = op.wLP / config_.lp.designSpeed;
   const double pScale = std::max(1e-3 * op.p0, std::max(0.0, op.Pt0 - op.p0)
                                  + op.Pt0 * design_.gaugeRatio * n1 * n1);
-  // Mixer entry is a one-way junction solved as an active set: open (equal
-  // total pressures) or blocked (no bypass flow). The caller switches regime
-  // when a converged solution violates its sign condition; each regime is smooth.
-  residual[1] = op.bypassBlocked ? W16raw / bypassScale : (s5.Pt - s16.Pt) / pScale;
-  g.bypassRaw = W16raw;
-  g.bypassDrive = s16.Pt - s5.Pt;
-  g.reverseBypassBlocked = op.bypassBlocked;
+  // Mixer entry is a one-way junction solved as an active set. Open: bypass
+  // air enters through its own area against the core stream's static
+  // pressure (it may choke there); blocked: no bypass flow. The caller
+  // switches regime when a converged solution violates its sign condition;
+  // each regime is smooth.
   Stream s16m = s16; s16m.W = W16;
-  Stream s6 = Mix(gas, s5, s16m, design_.mixer, ok);
-  if (!ok) return false;
+  MixerGeometry mixer = design_.mixerGeometry;
+  if (config_.lift.present)
+    mixer.bypassArea *= 1.0 + (config_.lift.bypassEntryAreaFactor - 1.0) * op.clutch;
+  const MixerResult mixed = MixAtStaticPressure(gas, s5, s16m, mixer);
+  if (!mixed.valid) return false;
+  residual[1] = op.bypassBlocked ? W16raw / bypassScale : (s16.Pt - mixed.bypassRequiredPt) / pScale;
+  g.bypassRaw = W16raw;
+  g.bypassDrive = s16.Pt - mixed.staticPressure;
+  g.reverseBypassBlocked = op.bypassBlocked;
+  Stream s6 = mixed.out;
+  const double mixerLoss = PressureLossFraction(design_.mixer, s6, s6.Tt);
+  if (!(mixerLoss < 0.9)) return false;
+  s6.Pt *= 1.0 - mixerLoss;
   g.st[kSt6] = s6;
   BurnerInput ab;
   ab.sprayKgSec = op.abFuelAir > 0.0 ? op.abFuelAir * s6.W : op.abSpray;
@@ -963,11 +1039,17 @@ bool Plant::EvaluatePath(const Operating& op, const double* x, GasPath& g, doubl
     NozzleGeometry ng = lift.nozzle;
     ng.throatArea *= op.door; ng.exitArea *= op.door;
     const double inletLoss = 1.0 - lift.inletRecovery;
+    // Inlet guide vanes: pre-swirl takes work out of the stage. The
+    // controller keeps the multiplier in [liftVaneMin, 1]; above 1 is a
+    // smooth extension so the steady solver's difference quotient at fully
+    // open vanes is not zero (it rejects a balance above 1).
+    CompressorMap fanMap = design_.liftFan;
+    fanMap.a *= std::max(0.0, op.liftVane);
     const auto excess = [&](double W, CompressorResult& cr, NozzleResult& nr) -> double {
       const double q = W / lift.designFlow;
       in.W = W;
       in.Pt = op.Pt0 * (1.0 - inletLoss * q * q);
-      cr = Compress(gas, design_.liftFan, in, op.wLF);
+      cr = Compress(gas, fanMap, in, op.wLF);
       if (!cr.valid) return NAN;
       if (!NozzleRequiredPressure(gas, cr.out, ng, op.p0, nr)) return NAN;
       return (cr.out.Pt - nr.requiredPt)
@@ -999,7 +1081,7 @@ bool Plant::EvaluatePath(const Operating& op, const double* x, GasPath& g, doubl
     in.W = g.liftFlow;
     in.Pt = op.Pt0 * (1.0 - inletLoss * (g.liftFlow / lift.designFlow) * (g.liftFlow / lift.designFlow));
     g.st[kStLiftFanIn] = in;
-    g.lf = Compress(gas, design_.liftFan, in, op.wLF);
+    g.lf = Compress(gas, fanMap, in, op.wLF);
     if (!g.lf.valid) return false;
     g.st[kStLiftFanOut] = g.lf.out;
     NozzleRequiredPressure(gas, g.lf.out, ng, op.p0, g.lfNozzle);
@@ -1233,6 +1315,8 @@ void Plant::Fill(const GasPath& g, const Operating& op, const PlantState& s, Pla
   (void)c;
   out.capturedAirKgSec = g.st[kSt2].W + g.liftFlow;
   out.ramDragN = out.capturedAirKgSec * op.V0;
+  out.inletRamDragN = g.st[kSt2].W * op.V0;
+  out.liftFanRamDragN = g.liftFlow * op.V0;
   out.netThrustN = out.nozzle.grossThrust + out.liftFan.grossThrust + out.rollPost[0].grossThrust
     + out.rollPost[1].grossThrust - out.ramDragN;
   out.n1Percent = 100.0 * s.omegaLP / config_.lp.designSpeed;
@@ -1294,6 +1378,7 @@ void Plant::OperatingFromState(const PlantState& s, const PlantInputs& in, Algor
   op.exitArea = s.throatArea * ExitAreaRatio(s.throatArea);
   for (int i = 0; i < 2; ++i) op.rollPostArea[i] = config_.lift.rollPostArea[i] * s.rollPost[i];
   op.door = s.door; op.clutch = s.clutch;
+  op.liftVane = s.control.splitVane;
   op.solidCount = static_cast<int>(s.solids.size());
   for (int i = 0; i < op.solidCount; ++i) op.solidK[i] = s.solids[i].temperature;
   op.liftFlowGuess = s.flows[3];
@@ -1473,6 +1558,7 @@ bool Plant::StepOnce(const PlantInputs& in, const StepCommands& cmd, double dt, 
   op.exitArea = throatAverage * ExitAreaRatio(throatAverage);
   for (int i = 0; i < 2; ++i) op.rollPostArea[i] = lift.rollPostArea[i] * postAverage[i];
   op.door = doorAverage; op.clutch = clutchAverage;
+  op.liftVane = s.control.splitVane;
   op.starterTorque = cmd.starterTorque;
   op.solidCount = static_cast<int>(s.solids.size());
   for (int i = 0; i < op.solidCount; ++i) op.solidK[i] = s.solids[i].temperature;
@@ -1690,6 +1776,8 @@ bool Plant::PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSe
     cs.sensedW3b = g.st[kSt3].W - g.st[kSt31].W;
     cs.sensedAir6 = g.st[kSt6].W * g.st[kSt6].c.y[kAir];
     cs.sensedW6 = g.st[kSt6].W;
+    cs.sensedMainThrust = Finite(out_.nozzle.grossThrust) ? out_.nozzle.grossThrust : 0.0;
+    cs.sensedLiftThrust = out_.liftFan.grossThrust;
     if (in.dt > 0.0) {
       const double tau = config_.control.egtSensorTimeConstant;
       const double a = tau > 0.0 ? 1.0 - std::exp(-in.dt / tau) : 1.0;
@@ -1708,7 +1796,12 @@ bool Plant::Advance(const PlantInputs& in)
   if (!in.advance || !(in.dt > 0.0)) {
     const bool eligible = state_.coreFlame.lit && state_.running && !in.cutoff && !in.seized
       && !in.stalled && in.fuelSupplyKg > 0.0;
-    return eligible ? Steady(in) : Refresh(in);
+    if (eligible && Steady(in)) return true;
+    // No steady point at these controls (or an engine that is not running):
+    // outputs follow the unchanged state, and the status says so.
+    const bool refreshed = Refresh(in);
+    out_.status.fallbackReason = eligible ? 5 : 0;
+    return refreshed;
   }
   if (out_.status.failure) return false;
   int iterations = 0, evaluations = 0;
@@ -1716,6 +1809,14 @@ bool Plant::Advance(const PlantInputs& in)
   StepCommands cmd;
   const int eventsAtStart = eventCount_;   // a failed step records no controller event
   UpdateController(in, trial_, in.dt, cmd.core, cmd.ab, cmd.starterTorque, cmd.throat);
+  if (nozzleBackoff_ < 1.0) {
+    // Hold back the nozzle command and the trims that drive it.
+    const double b = nozzleBackoff_;
+    cmd.throat = state_.throatArea + b * (cmd.throat - state_.throatArea);
+    ControllerState& cs = trial_.control;
+    cs.splitTrim = state_.control.splitTrim + b * (cs.splitTrim - state_.control.splitTrim);
+    cs.splitVane = state_.control.splitVane + b * (cs.splitVane - state_.control.splitVane);
+  }
   lastStarterTorque_ = cmd.starterTorque;
   out_.coreCommandKgSec = cmd.core;
   out_.abCommandKgSec = cmd.ab;
@@ -1759,6 +1860,8 @@ bool Plant::Advance(const PlantInputs& in)
     if (!done) fallback = iterations >= budgetEnd ? 1 : 2;
   }
   const auto fail = [&](int reason) {
+    nozzleBackoff_ = std::max(1.0 / 1024.0, 0.25 * nozzleBackoff_);
+    out_.status.nozzleBackoff = nozzleBackoff_;
     eventCount_ = eventsAtStart;
     lastStarved_ = lastStarvedBefore;
     out_.status.failure = true;
@@ -1781,6 +1884,8 @@ bool Plant::Advance(const PlantInputs& in)
   }
   time += in.dt;
   sequence_ += 1.0;
+  nozzleBackoff_ = std::min(1.0, 2.0 * nozzleBackoff_);
+  out_.status.nozzleBackoff = nozzleBackoff_;
   iterations += endIterations;
   Ledger& L = stepLedger_;
   const double massScale = L.massRelative;
@@ -1868,7 +1973,11 @@ bool Plant::InitializeRunning(const PlantInputs& in)
   state_.coreFlame.fraction = 1.0;
   state_.running = true;
   for (auto& solid : state_.solids) solid.warmPending = !solid.initialized;
-  if (!SolveSteady(in, true)) { state_ = saved; return false; }
+  // A warm start is a dry running point: the augmentor lights through its
+  // own transient, or through a later zero-time steady call that asks for it.
+  PlantInputs dry = in;
+  dry.augmentDemand = 0.0;
+  if (!SolveSteady(dry, false)) { state_ = saved; return false; }
   return true;
 }
 
@@ -1878,7 +1987,6 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   const LiftSystemConfig& lift = config_.lift;
   const Algorithm algorithm = Algorithm::Component;
   const GasProperties& gas = Gas(algorithm);
-  const double theta = std::sqrt(std::max(1e-6, in.totalTemperature / config_.design.ambientTemperature));
   const double wLPd = config_.lp.designSpeed, wHPd = config_.hp.designSpeed;
   const double wLFd = lift.present ? lift.fanShaft.designSpeed : 1.0;
   const double coreScale = design_.coreFlow;
@@ -1888,55 +1996,99 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   const double tLF = std::max(1.0, std::fabs(design_.liftFanTorque));
   const double A8d = design_.throatArea;
   const double demand = c.fanSpeedDemand(in.throttle);
-  double target = demand;     // N1 governor target; stepped by continuation
 
   PlantState s = state_;
   const double clutch = lift.present ? std::clamp(in.clutchCommand, 0.0, 1.0) : 0.0;
   const double door = lift.present ? std::clamp(in.doorCommand, 0.0, 1.0) : 0.0;
   const std::array<double, 2> posts{{lift.present ? std::clamp(in.rollPostCommand[0], 0.0, 1.0) : 0.0,
                                      lift.present ? std::clamp(in.rollPostCommand[1], 0.0, 1.0) : 0.0}};
-  const bool solveLF = lift.present && clutch > 0.0;
+  const bool running = s.running && s.coreFlame.lit && s.omegaHP > 0.0 && s.flows[4] > 0.0;
+  // Controls and flight condition of a known point and of the request. A
+  // running engine starts from its present state at the present condition;
+  // an engine without one starts from the design point at the design
+  // ambient. When the direct solve fails (mil to idle, afterburner to hover,
+  // sea level to altitude) the solve continues from one set to the other,
+  // halving the stride on failure.
+  struct Controls {
+    double n1, clutch, door, post0, post1, abFuelAir;
+    double p0, Pt0, Tt0, T0, V0, mach;
+  };
+  const DesignSpec& design = config_.design;
+  const double thetaIn = std::sqrt(std::max(1e-6, in.totalTemperature / design.ambientTemperature));
+  Controls to{demand, clutch, door, posts[0], posts[1], 0.0, in.ambientPressure, in.totalPressure,
+              in.totalTemperature, in.ambientTemperature, in.airspeed, in.mach};
+  Controls from = to;
+  if (running) {
+    from.n1 = s.omegaLP / wLPd / thetaIn;
+    from.clutch = s.clutch; from.door = s.door;
+    from.post0 = s.rollPost[0]; from.post1 = s.rollPost[1];
+    from.abFuelAir = s.abFlame.lit ? s.control.abFuelAir : 0.0;
+  } else {
+    from = Controls{1.0, 0.0, 0.0, 0.0, 0.0, 0.0, design.ambientPressure, design.ambientPressure,
+                    design.ambientTemperature, design.ambientTemperature, 0.0, 0.0};
+  }
+  Controls now = to;
+  const auto blend = [&](double lambda) {
+    const auto mix = [&](double u, double v) { return u + (v - u) * lambda; };
+    now = Controls{mix(from.n1, to.n1), mix(from.clutch, to.clutch), mix(from.door, to.door),
+                   mix(from.post0, to.post0), mix(from.post1, to.post1),
+                   mix(from.abFuelAir, to.abFuelAir), mix(from.p0, to.p0), mix(from.Pt0, to.Pt0),
+                   mix(from.Tt0, to.Tt0), mix(from.T0, to.T0), mix(from.V0, to.V0),
+                   mix(from.mach, to.mach)};
+  };
+  const auto thetaNow = [&]() {
+    return std::sqrt(std::max(1e-6, now.Tt0 / design.ambientTemperature));
+  };
+  const bool solveLF = lift.present;
   // Unknowns: the five gas-path unknowns, N1, N2, core fuel, throat area and
-  // (with an engaged lift fan) its speed.
+  // (with a lift system) the lift-fan speed.
   constexpr int kN1 = kPathUnknowns, kN2 = kN1 + 1, kWf = kN1 + 2, kA8 = kN1 + 3, kLF = kN1 + 4;
   const int n = solveLF ? kLF + 1 : kLF;
   Operating op;
   op.gas = &gas;
-  FillOperatingEnvironment(in, op.p0, op.Pt0, op.Tt0, op.V0, op.T0, op.mach);
   op.bypassBlocked = false;
   op.coreLit = true;
   op.stalled = false;
-  op.door = door; op.clutch = clutch;
-  for (int i = 0; i < 2; ++i) op.rollPostArea[i] = lift.rollPostArea[i] * posts[i];
   op.solidCount = static_cast<int>(s.solids.size());
   GasPath& g = *midpointStorage_;
   int mode = 0;               // 0 N1, 3 N2 max, 4 T5 max, 5 idle
-  bool abActive = false;
+  // Thrust split (lift fan engaged and a split commanded): the throat area
+  // is the unknown that balances lift-fan against main-nozzle thrust, or
+  // sits at an area limit when the commanded split is out of reach.
+  const bool splitWanted = lift.present && in.liftSplit > 0.0 && clutch > 0.0 && door > 0.0;
+  bool splitAtBound = false, splitVaneMode = false;
+  double splitBound = 0.0, scheduledArea = 0.0, splitBalance = 0.0;
   double y[kMaxUnknowns];
-  const bool running = s.running && s.coreFlame.lit && s.omegaHP > 0.0 && s.flows[4] > 0.0;
-  const double N1guess = running ? s.omegaLP / wLPd : std::max(0.3, demand * theta);
   const double lnHPd = std::log(design_.stationPt[kSt4] / design_.stationPt[kSt41]);
   const double lnLPd = std::log(design_.stationPt[kSt45] / design_.stationPt[kSt5]);
-  y[0] = running ? s.flows[0] / coreScale : std::pow(N1guess, 1.5);
-  y[1] = running ? s.flows[1] / bypassScale : std::pow(N1guess, 1.5);
+  y[0] = running ? s.flows[0] / coreScale : 1.0;
+  y[1] = running ? s.flows[1] / bypassScale : design_.bypassFlow / bypassScale;
   y[2] = running ? s.flows[2] / bypassScale : y[1];
-  y[3] = running ? s.flows[4] : lnHPd * N1guess * N1guess;
-  y[4] = running ? s.flows[5] : lnLPd * N1guess * N1guess;
-  y[kN1] = N1guess;
-  y[kN2] = running ? s.omegaHP / wHPd : std::max(0.6, 0.6 + 0.4 * N1guess);
-  y[kWf] = running ? std::max(0.05, s.core.metered / design_.fuelFlow) : std::pow(N1guess, 3.0);
-  y[kA8] = running ? s.throatArea / A8d : c.dryThroatArea(N1guess);
-  y[kLF] = running && lift.present ? s.omegaLF / wLFd : lift.gearRatio * N1guess * wLPd / wLFd;
+  y[3] = running ? s.flows[4] : lnHPd;
+  y[4] = running ? s.flows[5] : lnLPd;
+  y[kN1] = running ? s.omegaLP / wLPd : 1.0;
+  y[kN2] = running ? s.omegaHP / wHPd : 1.0;
+  y[kWf] = running ? std::max(0.05, s.core.metered / design_.fuelFlow) : 1.0;
+  y[kA8] = running ? s.throatArea / A8d : c.dryThroatArea(1.0);
+  y[kLF] = running && lift.present ? s.omegaLF / wLFd : 0.0;
   double lower[kMaxUnknowns] = {0, -1e3, -1e3, 0, 0, 0, 0, 0, 0, 0};
   lower[kA8] = c.throatAreaMin;
   const auto residual = [&](const double* x, double* r) {
+    op.p0 = now.p0; op.Pt0 = now.Pt0; op.Tt0 = now.Tt0; op.T0 = now.T0; op.V0 = now.V0;
+    op.mach = now.mach;
+    const double theta = thetaNow();
     op.wLP = x[kN1] * wLPd; op.wHP = x[kN2] * wHPd;
-    op.wLF = solveLF ? x[kLF] * wLFd : s.omegaLF;
+    op.wLF = solveLF ? x[kLF] * wLFd : 0.0;
     op.coreSpray = x[kWf] * design_.fuelFlow;
-    op.abLit = abActive;
-    op.abFuelAir = abActive ? c.abFuelAirRatio(std::min(1.0, in.augmentDemand)) : 0.0;
+    // In vane mode the throat sits at its minimum and the unknown in the
+    // area slot is the lift-fan guide-vane multiplier.
+    op.door = now.door; op.clutch = now.clutch;
+    op.liftVane = splitVaneMode ? x[kA8] : 1.0;
+    op.rollPostArea = {{lift.rollPostArea[0] * now.post0, lift.rollPostArea[1] * now.post1}};
+    op.abLit = now.abFuelAir > 0.0;
+    op.abFuelAir = now.abFuelAir;
     op.abSpray = 0.0;
-    op.throatArea = x[kA8] * A8d;
+    op.throatArea = splitVaneMode ? design_.throatMin : x[kA8] * A8d;
     op.exitArea = op.throatArea * ExitAreaRatio(op.throatArea);
     for (int i = 0; i < op.solidCount; ++i) op.solidK[i] = s.solids[i].temperature;
     if (!EvaluatePath(op, x, g, r)) return false;
@@ -1947,14 +2099,36 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
     case 3: r[kWf] = N2 - c.maxN2; break;
     case 4: r[kWf] = (c.maxTurbineExitK - g.st[kSt5].Tt) / c.maxTurbineExitK; break;
     case 5: r[kWf] = N2c - c.idleCorrectedN2; break;
-    default: r[kWf] = N1c - target;
+    default: r[kWf] = N1c - now.n1;
     }
-    double area = A8d * c.dryThroatArea(N1c);
-    if (abActive) {
+    double area = A8d * c.dryThroatArea(N1c) * (1.0 + (c.liftThroatAreaFactor - 1.0) * now.clutch * now.door)
+      * std::clamp(in.throatAreaTrim, 0.5, 2.0);
+    if (now.abFuelAir > 0.0) {
       area *= 1.0 + c.abPreopenFraction;
       if (g.st[kSt7].Tt > g.st[kSt6].Tt) area *= std::sqrt(g.st[kSt7].Tt / g.st[kSt6].Tt);
     }
-    r[kA8] = (x[kA8] * A8d - std::clamp(area, design_.throatMin, design_.throatMax)) / A8d;
+    scheduledArea = std::clamp(area, design_.throatMin, design_.throatMax);
+    r[kA8] = (x[kA8] * A8d - scheduledArea) / A8d;
+    if (splitWanted) {
+      NozzleGeometry main;
+      main.throatArea = op.throatArea; main.exitArea = op.exitArea;
+      main.dischargeCoefficient = config_.design.nozzleDischarge;
+      main.velocityCoefficient = config_.design.nozzleVelocityCoefficient;
+      main.separationPressureRatio = config_.design.nozzleSeparationRatio;
+      NozzleGeometry fan = lift.nozzle;
+      fan.throatArea *= op.door; fan.exitArea *= op.door;
+      NozzleResult mainJet, fanJet;
+      if (!NozzleThrust(gas, g.st[kSt7], main, op.p0, mainJet)) return false;
+      const double lifted = g.liftFlow > 0.0 && NozzleThrust(gas, g.st[kStLiftFanOut], fan, op.p0, fanJet)
+        ? fanJet.grossThrust : 0.0;
+      const double wanted = in.liftSplit * mainJet.grossThrust;
+      splitBalance = (lifted - wanted) / (lifted + wanted + 1e-6 * design_.thrust);
+      // Blended with the schedule by clutch engagement, so the continuation
+      // from conventional flight is smooth; both terms rise with area.
+      if (splitVaneMode) r[kA8] = splitBalance;
+      else if (splitAtBound) r[kA8] = (x[kA8] * A8d - splitBound) / A8d;
+      else r[kA8] = (1.0 - now.clutch) * r[kA8] + now.clutch * splitBalance;
+    }
     if (solveLF) r[kLF] = g.lfNet / tLF;
     return true;
   };
@@ -1970,7 +2144,7 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
     mode = 0;
     for (int pass = 0; pass < 4; ++pass) {
       if (!solve()) return false;
-      const double N2 = y[kN2], N2c = N2 / theta;
+      const double N2 = y[kN2], N2c = N2 / thetaNow();
       double r[kMaxUnknowns];
       residual(y, r);
       int next = mode;
@@ -1982,32 +2156,72 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
     }
     return false;
   };
-  // A large change of demand from a running point (mil to idle, say) leaves
-  // the linearization far from the answer: continue in the N1 target from
-  // the present corrected speed, halving the stride on failure.
-  double start[kMaxUnknowns];
-  std::memcpy(start, y, sizeof(start));
-  if (!converge()) {
+  // With a split commanded, an answer outside the area limits is replaced
+  // by the limit the split pushes against.
+  const auto governed = converge;
+  const auto convergeWithSplit = [&]() -> bool {
+    if (!splitWanted) return governed();
+    if (splitVaneMode) y[kA8] = design_.throatMin / A8d;   // the slot held the vane multiplier
+    double entry[kMaxUnknowns];
+    std::memcpy(entry, y, sizeof(entry));
+    splitAtBound = splitVaneMode = false;
+    lower[kA8] = c.throatAreaMin;
+    if (governed() && y[kA8] * A8d <= design_.throatMax * (1.0 + 1e-9)
+        && y[kA8] * A8d >= design_.throatMin * (1.0 - 1e-9)) return true;
+    for (const double bound : {design_.throatMin, design_.throatMax}) {
+      std::memcpy(y, entry, sizeof(entry));
+      splitAtBound = true;
+      splitBound = bound;
+      y[kA8] = bound / A8d;
+      if (!governed()) continue;
+      // At the minimum the fan is still too strong; at the maximum too weak.
+      if ((bound == design_.throatMin) != (splitBalance >= 0.0)) continue;
+      if (bound == design_.throatMin) {
+        // Throat at its minimum: close the lift-fan guide vanes for the rest.
+        double atBound[kMaxUnknowns];
+        std::memcpy(atBound, y, sizeof(atBound));
+        splitVaneMode = true;
+        lower[kA8] = c.liftVaneMin;
+        y[kA8] = 1.0;
+        if (governed() && y[kA8] <= 1.0) return true;
+        splitVaneMode = false;
+        lower[kA8] = c.throatAreaMin;
+        std::memcpy(y, atBound, sizeof(atBound));
+        if (!governed()) continue;
+      }
+      return true;
+    }
+    splitAtBound = false;
+    return false;
+  };
+  const auto reach = [&]() -> bool {
+    double start[kMaxUnknowns];
+    std::memcpy(start, y, sizeof(start));
+    blend(1.0);
+    if (convergeWithSplit()) return true;
     std::memcpy(y, start, sizeof(start));
-    const double from = y[kN1] / theta;
     double lambda = 0.0, stride = 0.25;
     while (lambda < 1.0) {
       const double next = std::min(1.0, lambda + stride);
-      target = from + (demand - from) * next;
+      blend(next);
       double keep[kMaxUnknowns];
       std::memcpy(keep, y, sizeof(keep));
-      if (converge()) { lambda = next; stride = std::min(0.5, 2.0 * stride); }
+      if (convergeWithSplit()) { lambda = next; stride = std::min(0.5, 2.0 * stride); }
       else {
         std::memcpy(y, keep, sizeof(keep));
         stride *= 0.5;
-        if (stride < 1.0 / 64.0) return false;
+        if (stride < 1.0 / 256.0) return false;
       }
     }
-  }
+    return true;
+  };
+  if (!reach()) return false;
   if (config_.augmented && in.augmentDemand > 0.0 && !in.cutoff && y[kN2] >= c.abMinimumN2) {
-    abActive = true;
-    if (!converge()) return false;
+    from = to;
+    to.abFuelAir = c.abFuelAirRatio(std::min(1.0, in.augmentDemand));
+    if (!reach()) return false;
   }
+  const bool abActive = now.abFuelAir > 0.0;
   // Thermal policy: pending warm solids (or an explicit request) take their
   // equilibrium at this operating point; others are held.
   const bool anyPending = std::any_of(s.solids.begin(), s.solids.end(),
@@ -2048,7 +2262,7 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   s.core.manifold = config_.coreFuel.manifoldPrimeMass + wf * std::max(1e-6, config_.coreFuel.manifoldTimeConstant);
   s.coreFlame.lit = true; s.coreFlame.progress = 0.0; s.coreFlame.fraction = 1.0;
   s.running = true;
-  s.throatArea = y[kA8] * A8d;
+  s.throatArea = splitVaneMode ? design_.throatMin : y[kA8] * A8d;
   if (abActive) {
     const double far = c.abFuelAirRatio(std::min(1.0, in.augmentDemand));
     const double wab = far * g.st[kSt6].W;
@@ -2071,6 +2285,8 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   s.control.sensedW3b = g.st[kSt3].W - g.st[kSt31].W;
   s.control.sensedAir6 = g.st[kSt6].W * g.st[kSt6].c.y[kAir];
   s.control.sensedW6 = g.st[kSt6].W;
+  s.control.splitTrim = splitWanted && scheduledArea > 0.0 ? s.throatArea / scheduledArea : 1.0;
+  s.control.splitVane = splitVaneMode ? y[kA8] : 1.0;
   s.control.egtGaugeK = g.st[kSt5].Tt;
   s.starter = false;
   s.flows = {g.st[kSt25].W, g.st[kSt13].W, std::max(0.0, g.st[kSt16].W), g.liftFlow, y[3], y[4]};
@@ -2084,6 +2300,8 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   OperatingFromState(state_, in, algorithm, pub);
   pub.bypassBlocked = op.bypassBlocked;
   Fill(g, pub, state_, out_);
+  state_.control.sensedMainThrust = Finite(out_.nozzle.grossThrust) ? out_.nozzle.grossThrust : 0.0;
+  state_.control.sensedLiftThrust = out_.liftFan.grossThrust;
   out_.ledger = Ledger();
   out_.status.iterations = iterations;
   out_.status.residualEvaluations = evaluations;

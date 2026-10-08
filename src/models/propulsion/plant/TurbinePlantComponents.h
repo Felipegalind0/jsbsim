@@ -130,6 +130,36 @@ BurnerResult Burn(const GasProperties& gas, const Stream& in, const BurnerInput&
 Stream Mix(const GasProperties& gas, const Stream& a, const Stream& b, const LossModel& loss,
            bool& valid);
 
+/** Static-to-total pressure ratio, static temperature and velocity of a
+    stream passing an area subsonically. Returns false when the area cannot
+    pass the flow. */
+bool SubsonicStaticState(const GasProperties& gas, const Stream& s, double area,
+                         double& pressureRatio, double& Ts, double& V);
+
+struct MixerGeometry {
+  double coreArea = 0.0;     ///< m^2 of the core stream at the mixing plane
+  double bypassArea = 0.0;   ///< m^2 through which bypass air enters
+};
+
+struct MixerResult {
+  Stream out;                      ///< mixed stream; friction loss not applied
+  double staticPressure = 0.0;     ///< Pa at the mixing plane, set by the core stream
+  /// Pa of bypass total pressure that drives the bypass flow into the mixer
+  /// (odd extension about the static pressure for negative solver iterates).
+  double bypassRequiredPt = 0.0;
+  bool bypassChoked = false;
+  bool valid = false;
+};
+
+/** Constant-area mixing of a core stream with bypass air injected through
+    its own area against the core's static pressure. Mass, energy and
+    momentum are conserved, so unequal total pressures (a bypass stream
+    choked at the mixer when the turbine exit pressure is low) pay their
+    mixing loss. A negative bypass flow is accepted only as a smooth
+    extension for solver iterates. */
+MixerResult MixAtStaticPressure(const GasProperties& gas, const Stream& core,
+                                const Stream& bypass, const MixerGeometry& geometry);
+
 /** Adds heat (positive into the gas) at constant pressure. */
 bool AddHeat(const GasProperties& gas, Stream& s, double heatW);
 

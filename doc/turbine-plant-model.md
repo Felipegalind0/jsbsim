@@ -19,16 +19,54 @@ components) and `tests/TestTurbinePlant.py` (the adapter on the F16 fixture).
 | --- | --- |
 | Gas | Three pseudo-species: air, stoichiometric products of the fuel (C12H23 by default), unburned fuel. NASA 7-coefficient polynomials (GRI-Mech 3.0) for the reference; generated Hermite tables for the reduced algorithm; a calorically perfect option for analytical fixtures. Sensible enthalpy from 298.15 K plus burned fuel times the lower heating value, so chemical energy is counted once. No dissociation, CO, NOx or soot. |
 | Stations | SAE ARP755: 0, 2, 21, 13, 16, 25, 3, 31, 4, 41, 45, 5, 6, 7, 8, 9, plus lift-fan inlet and exit. |
-| Fan, compressor, lift fan | Euler-stage surrogate: work `U(aU - bVa)` finite at zero speed, profile and incidence losses. A one-point surrogate calibrated at the design point, not a measured map; no positive-slope (surge) region. |
+| Fan, compressor, lift fan | Euler-stage surrogate: work `U(aU - bVa)` finite at zero speed, profile and incidence losses. A one-point surrogate calibrated at the design point, not a measured map; no positive-slope (surge) region. Lift-fan inlet guide vanes scale the work coefficient `a` (pre-swirl), from fully open (1) down to `lift-vane-min`. |
 | Turbines | Stodola ellipse capacity and a parabolic velocity-ratio efficiency written as torque, finite at zero speed. |
 | Burners | Oxygen-limited; unburned fuel is carried downstream and can burn later. Core efficiency follows a normalized Lefebvre loading; the augmentor uses a constant efficiency. Both scale with the lit fraction during light-around. |
-| Mixer | One-way junction: open (equal total pressures) or blocked (no bypass flow), solved as an active set. |
+| Mixer | Constant-area mixing at the core stream's static pressure: the core passes its design entry area subsonically; bypass air is injected through its own entry area against that static pressure and may choke there. Mass, energy and momentum are conserved, so streams of unequal total pressure pay their mixing loss. Entry areas are sized at the design point from `mixer-static-pressure-ratio`. One-way: open, or blocked (no bypass flow), solved as an active set. |
 | Nozzle | Convergent-divergent with variable-property sonic state; regimes no flow, subsonic, choked with internal shock, overexpanded attached, overexpanded separated (Summerfield, wall pressure 0.4 of ambient), underexpanded or ideal. |
 | Shafts | LP, HP and optional lift-fan rotors, implicit midpoint solved jointly with the gas path, so rotor energy change equals mean shaft power times the step exactly. Coulomb, viscous and aerodynamic losses; accessory load; air-turbine starter; slipping clutch to the lift fan. |
 | Fuel | Metering valves (exact first-order lag plus rate limit), manifold fill to a prime mass then a first-order primed response, optional drain to dump when shut off. Supply-limited delivery with core priority. |
 | Ignition | A flame lights after `ignition-delay-s` of ignitable conditions (equivalence ratio within limits, pressure, augmentor inlet temperature) and spreads over `light-around-time-s`; it blows out outside the limits. Flames change state at the end of a step; burning starts on the next step. |
-| Controller | Representative min/max governor in the style of NASA C-MAPSS40k: N1 demand, idle N2, N2 and turbine-exit-temperature limits, acceleration and deceleration ratio-unit limits with back-calculation anti-windup, start schedule, augmentor selection then light-off flow then a ramp, nozzle schedule with pre-open and constant corrected flow when lit. |
+| Controller | Representative min/max governor in the style of NASA C-MAPSS40k: N1 demand, idle N2, N2 and turbine-exit-temperature limits, acceleration and deceleration ratio-unit limits with back-calculation anti-windup, start schedule, augmentor selection then light-off flow then a ramp, nozzle schedule with pre-open and constant corrected flow when lit, and an open-loop `throat-area-trim` input. With a lift system: see below. |
 | Solids | Lumped capacities between a gas station (5 or 7), a coolant (bypass or cooling air) and radiation to the surroundings; stream conductance `W cp (1 - exp(-h/(W cp)))` never lets a stream pass the wall temperature. |
+
+### Lift system
+
+An optional shaft-driven lift fan on the LP spool through a slipping clutch,
+with its own inlet, guide vanes and nozzle (door), and two roll posts bled
+from the bypass duct. The controller adds:
+
+- A lift-mode nozzle opening, `lift-throat-area-factor`, scaled by clutch
+  engagement times door opening: opening the nozzle lowers turbine back
+  pressure so the LP turbine can drive the fan, and the opening goes away
+  with the fan's load, not after it.
+- A thrust-split loop holding lift-fan gross thrust at `thrust-split-command`
+  times main-nozzle gross thrust (0 disables). The guide vanes act at once in
+  either direction while they have travel (they can only take work out of the
+  fan); with them fully open, a fan that is too weak is met by opening the
+  throat. Closed vanes are washed out (`lift-split-washout-per-sec`) by
+  closing the throat, which raises jet thrust, until the vanes are open again
+  or the throat is at its minimum. The trim never winds up past the area
+  limits and relaxes to 1 when the split is idle.
+- An LP speed limit, `max-n1` (off by default): with the fan engaged, an N1
+  above it opens the vanes and closes the throat, which takes power off the
+  LP turbine faster than fuel can when the fan unloads (a closing conversion).
+- `bypass-entry-area-factor`: the mixer's bypass entry shrinks with clutch
+  engagement. A declared surrogate for however the real engine holds its fan
+  operating line while the nozzle opens in lift mode; 1 disables it.
+
+The steady solve holds the commanded split with the throat area as the
+unknown; when the answer lies beyond an area limit it holds the limit, and
+at the minimum it closes the guide vanes for the rest.
+
+### Ambient
+
+The plant takes the local static pressure and temperature and the total
+pressure and temperature at the aircraft from `FGEngine` inputs (that is,
+from `FGAtmosphere` and `FGAuxiliary`), whatever set them: a standard
+atmosphere with `delta-T`, a temperature profile, or a weather source. It
+never reads `atmosphere/delta-T`. Corrected speeds are referred to the fixed
+standard-day 288.15 K, a reference, not an assumption about the atmosphere.
 
 ## Numerical formulation
 
@@ -53,9 +91,20 @@ core fuel, throat area and the lift-fan speed.
   reserved for publication. A step that cannot be solved within the cap
   keeps the previous accepted state and reports `numerics/failure`; the
   adapter retries on the next step.
+- A step that cannot be solved quarters the nozzle's commanded move (and
+  the split trim's) for the next step; each accepted step doubles it back
+  (`numerics/nozzle-backoff`). A nozzle commanded beyond where the gas path
+  has a solution stops there instead of freezing the engine.
 - Zero-time calls (run_ic, trim, suspended integration) solve the steady
   operating point at the present controls for a running, fuelled, unstalled
-  engine, and otherwise only refresh outputs from the unchanged state.
+  engine, and otherwise only refresh outputs from the unchanged state
+  (`numerics/fallback-reason` 5 when no steady point was found).
+- The steady solve is a continuation: from the present state of a running
+  engine, otherwise from the design point at the design ambient, the controls
+  and flight condition (N1 demand, clutch, door, roll posts, ambient and ram
+  conditions) are blended to their present values, halving the stride on a
+  failure down to 1/256. An augmentor demand is reached as a second
+  continuation from the dry point.
 
 ## Conservation
 
@@ -99,16 +148,24 @@ the defaults in `TurbinePlant.h`. Tables are one `x y` pair per line.
       <fan-speed-demand>0 0.55
         1 1.0</fan-speed-demand>
       ...
+      <lift-throat-area-factor>1.4</lift-throat-area-factor>   <!-- with a lift system -->
+      <lift-split-gain-per-sec>12</lift-split-gain-per-sec>
+      <lift-split-washout-per-sec>1</lift-split-washout-per-sec>
+      <lift-vane-min>0.4</lift-vane-min>
+      <max-n1>1.04</max-n1>
     </controller>
     <solid name="liner">...</solid>
     <lift-system>                     <!-- optional -->
       ...
+      <bypass-entry-area-factor>1</bypass-entry-area-factor>
       <clutch-command>fcs/lift-fan-clutch-norm</clutch-command>
+      <thrust-split-command>fcs/lift-split</thrust-split-command>
       <door-command>fcs/lift-fan-door-norm</door-command>
       <left-roll-post-command>...</left-roll-post-command>
       <right-roll-post-command>...</right-roll-post-command>
     </lift-system>
     <augment-demand>property</augment-demand>  <!-- optional, overrides augmethod -->
+    <throat-area-trim>property</throat-area-trim>  <!-- optional nozzle trim, 0.5..2 -->
     <numerics><algorithm>reduced</algorithm><iteration-cap>16</iteration-cap></numerics>
   </plant>
 </turbine_engine>
@@ -127,7 +184,13 @@ Under `propulsion/engine[n]/plant/`, all read-only unless marked:
 - `lift-fan/`, `roll-post[0]/`, `roll-post[1]/` gross thrust, mass flow, exit
   velocity and temperature; lift-fan speed, shaft power, clutch torque.
 - `ram-drag-lbs` (captured air times airspeed, along the free stream; apply it
-  as a WIND-frame external force), `captured-air-kg-sec`, `net-thrust-lbs`.
+  as a WIND-frame external force), with its parts `inlet-ram-drag-lbs` and
+  `lift-fan/ram-drag-lbs` to apply at each inlet; `captured-air-kg-sec`,
+  `net-thrust-lbs`.
+- `control/` limiter (0 N1, 1 acceleration, 2 deceleration, 3 N2 max, 4
+  turbine-exit temperature, 5 idle, 6 start, 7 off), `split-trim`,
+  `split-vane`, and the actuator positions `clutch`, `lift-nozzle`,
+  `roll-post[0]`, `roll-post[1]`.
 - `station/<st2|st21|...|liftfan-exit>/` total temperature and pressure, mass
   flow, fuel-air ratio, unburned fraction.
 - `shaft/`, `fuel/`, `combustion/`, `solid/<name>/`, `ledger/`, `numerics/`,
@@ -177,7 +240,14 @@ rest, cumulative about 1e-9) and mass about 1e-15; augmentor thrust exceeds that
 of the same state without augmentor spray by at most the spray's momentum until
 fuel burns; changing only selection labels leaves evaluation bit-identical;
 the reduced algorithm stays within 1% of design thrust and 5 K of the reference;
-60/120/240 Hz stay within 1% of design thrust of a 1920 Hz reference.
+60/120/240 Hz stay within 1% of design thrust of a 1920 Hz reference. The
+momentum mixer conserves mass, energy and impulse to 1e-9 and raises entropy;
+uniform streams mix without loss. A steady start at 1500 m and Mach 0.4
+agrees with the settled transient. The thrust split is held to 1e-3 by vanes
+with the throat at its minimum, and by the throat with the vanes open; the
+steady solve finds the same points, and a cut in the split is taken by the
+vanes within 0.5 s. With the LP speed limit, the overspeed of an unloading
+lift fan beyond the limit is less than half of that without it.
 
 ## Limits
 
@@ -189,3 +259,9 @@ the reduced algorithm stays within 1% of design thrust and 5 K of the reference;
 - No volume dynamics, no surge or rotating stall dynamics, no natural
   convection at rest, no dissociation. Maps are surrogates; a configured engine
   is a calibrated approximation, never a measured one.
+- The lift-system control (vanes, throat trim, LP limit) and the bypass entry
+  surrogate are representative, not a published FADEC. The N2 limit shares the
+  governor's integrator; `max-n2-gain` much above 10 limit-cycles against the
+  N1 loop.
+- The nozzle back-off has no native test: no synthetic configuration reaches
+  a nozzle command without a gas-path solution.

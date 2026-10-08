@@ -94,6 +94,8 @@ const ValueSpec kValues[] = {
   PV("roll-post[1]/exit-velocity-mps", o.rollPost[1].exitVelocity),
   PV("roll-post[1]/exit-static-temperature-k", o.rollPost[1].exitStaticTemperature),
   PV("ram-drag-lbs", o.ramDragN / kNewtonsPerLbf),
+  PV("inlet-ram-drag-lbs", o.inletRamDragN / kNewtonsPerLbf),
+  PV("lift-fan/ram-drag-lbs", o.liftFanRamDragN / kNewtonsPerLbf),
   PV("captured-air-kg-sec", o.capturedAirKgSec),
   PV("net-thrust-lbs", o.netThrustN / kNewtonsPerLbf),
   PV("shaft/n1-percent", o.n1Percent),
@@ -131,6 +133,13 @@ const ValueSpec kValues[] = {
   PV("combustion/core-equivalence-ratio", o.coreEquivalence),
   PV("combustion/ab-equivalence-ratio", o.abEquivalence),
   PV("combustion/egt-gauge-k", o.egtGaugeK),
+  PV("control/limiter", s.control.limiter),
+  PV("control/split-trim", s.control.splitTrim),
+  PV("control/split-vane", s.control.splitVane),
+  PV("control/clutch", s.clutch),
+  PV("control/lift-nozzle", s.door),
+  PV("control/roll-post[0]", s.rollPost[0]),
+  PV("control/roll-post[1]", s.rollPost[1]),
   PV("running", Flag(s.running)),
   PV("starter-engaged", Flag(s.starter)),
   PV("ledger/air-in-j", o.ledger.airInJ),
@@ -165,6 +174,7 @@ const ValueSpec kValues[] = {
   PV("numerics/converged", Flag(o.status.converged)),
   PV("numerics/fallback-reason", o.status.fallbackReason),
   PV("numerics/failure", Flag(o.status.failure)),
+  PV("numerics/nozzle-backoff", o.status.nozzleBackoff),
   PV("numerics/domain-clamps", static_cast<double>(o.status.domainClamps)),
   PV("numerics/resident-bytes", o.status.residentBytes),
   PV("numerics/sequence", o.status.sequence),
@@ -200,7 +210,7 @@ struct FGTurbine::PlantAdapter {
   double stepFuelKg = 0.0;
   double thrustLbs = 0.0;
   double commitStatus = 0.0;     ///< 1 accepted, -1 rejected, 0 none since load or reset
-  std::shared_ptr<FGPropertyValue> augment, clutch, door, rollPost[2];
+  std::shared_ptr<FGPropertyValue> augment, throatTrim, liftSplit, clutch, door, rollPost[2];
   std::vector<double> values;    ///< published; tied by pointer, never resized after binding
   std::vector<double> record;    ///< staged state record: header, then PackState
   double eventCount = 0.0, lastEventCode = 0.0, lastEventTime = 0.0;
@@ -245,8 +255,10 @@ void FGTurbine::LoadPlant(FGFDMExec* exec, Element* el)
     return std::make_shared<FGPropertyValue>(field->GetDataLine(), pm, field);
   };
   adapter->augment = source(block, "augment-demand");
+  adapter->throatTrim = source(block, "throat-area-trim");
   Element* lift = block->FindElement("lift-system");
   adapter->clutch = source(lift, "clutch-command");
+  adapter->liftSplit = source(lift, "thrust-split-command");
   adapter->door = source(lift, "door-command");
   adapter->rollPost[0] = source(lift, "left-roll-post-command");
   adapter->rollPost[1] = source(lift, "right-roll-post-command");
@@ -318,6 +330,10 @@ void FGTurbine::FillPlantInputs(PlantInputs& pi, bool advance) const
   pi.clutchCommand = command(a.clutch);
   pi.doorCommand = command(a.door);
   pi.rollPostCommand = {{command(a.rollPost[0]), command(a.rollPost[1])}};
+  const double trim = a.throatTrim ? a.throatTrim->GetValue() : 1.0;
+  pi.throatAreaTrim = std::isfinite(trim) ? trim : 1.0;
+  const double split = a.liftSplit ? a.liftSplit->GetValue() : 0.0;
+  pi.liftSplit = std::isfinite(split) && split > 0.0 ? split : 0.0;
 }
 
 double FGTurbine::CalculatePlant(void)

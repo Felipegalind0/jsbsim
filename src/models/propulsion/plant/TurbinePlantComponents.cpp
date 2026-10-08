@@ -410,5 +410,111 @@ bool NozzleThrust(const GasProperties& gas, const Stream& stream, const NozzleGe
   return r.valid;
 }
 
+
+bool SubsonicStaticState(const GasProperties& gas, const Stream& s, double area,
+                         double& pressureRatio, double& Ts, double& V)
+{
+  pressureRatio = 1.0; Ts = s.Tt; V = 0.0;
+  if (!(area > 0.0 && s.Pt > 0.0 && s.Tt > 0.0)) return false;
+  if (!(s.W > 0.0)) return true;
+  const double R = gas.R(s.c);
+  double Tstar, xstar, gstar;
+  if (!SonicState(gas, s.c, s.Tt, Tstar, xstar, gstar)) return false;
+  if (!(s.W < area * s.Pt * gstar)) return false;
+  // Continuity in velocity: f(V) = A Ps(V) V / (R Ts(V)) - W rises through
+  // the subsonic range and is well behaved at vanishing flow.
+  const double phiT = gas.Phi(s.c, s.Tt);
+  const double vMax = std::sqrt(gas.Gamma(s.c, Tstar) * R * Tstar);
+  double low = 0.0, high = vMax;
+  V = std::min(0.9 * vMax, s.W * R * s.Tt / (area * s.Pt));
+  for (int i = 0; i < 60; ++i) {
+    if (!gas.TemperatureFromH(s.c, s.ht - 0.5 * V * V, Ts, Ts)) return false;
+    const double x = std::exp((gas.Phi(s.c, Ts) - phiT) / R);
+    const double f = area * s.Pt * x * V / (R * Ts) - s.W;
+    if (f > 0.0) high = V; else low = V;
+    // d ln(rho V)/dV = 1/V - V/(gamma R Ts) for an isentropic stream.
+    const double slope = area * s.Pt * x / (R * Ts) * (1.0 - V * V / (gas.Gamma(s.c, Ts) * R * Ts));
+    double next = slope > 0.0 ? V - f / slope : 0.5 * (low + high);
+    if (!(next > low && next < high)) next = 0.5 * (low + high);
+    if (std::fabs(next - V) <= 1e-13 * vMax) { V = next; break; }
+    V = next;
+  }
+  if (!gas.TemperatureFromH(s.c, s.ht - 0.5 * V * V, Ts, Ts)) return false;
+  pressureRatio = std::exp((gas.Phi(s.c, Ts) - phiT) / R);
+  return Finite(pressureRatio) && Finite(V);
+}
+
+MixerResult MixAtStaticPressure(const GasProperties& gas, const Stream& core,
+                                const Stream& bypass, const MixerGeometry& geometry)
+{
+  MixerResult r;
+  r.out = core;
+  double x, Ts, V5;
+  if (!SubsonicStaticState(gas, core, geometry.coreArea, x, Ts, V5)) return r;
+  const double Ps = x * core.Pt;
+  r.staticPressure = Ps;
+  // Bypass air enters through its own area against the core's static pressure.
+  Stream injected = bypass;
+  injected.W = std::fabs(bypass.W);
+  NozzleGeometry entry;
+  entry.throatArea = entry.exitArea = geometry.bypassArea;
+  NozzleResult nozzle;
+  if (!NozzleThrust(gas, injected, entry, Ps, nozzle)) return r;
+  const double sign = bypass.W < 0.0 ? -1.0 : 1.0;
+  r.bypassRequiredPt = Ps + sign * (nozzle.requiredPt - Ps);
+  r.bypassChoked = nozzle.choked;
+
+  Stream m;
+  m.W = core.W + bypass.W;
+  if (!(m.W > 0.0)) {
+    if (m.W < 0.0) return r;
+    m = core;
+    m.W = 0.0;
+    m.Pt = Ps;
+    r.out = m;
+    r.valid = true;
+    return r;
+  }
+  for (int k = 0; k < kSpeciesCount; ++k)
+    m.c.y[k] = (core.W * core.c.y[k] + bypass.W * bypass.c.y[k]) / m.W;
+  if (!SetEnthalpy(gas, m, (core.W * core.ht + bypass.W * bypass.ht) / m.W,
+                   core.W >= bypass.W ? core.Tt : bypass.Tt)) return r;
+  // Impulse at the mixing plane: momentum plus pressure on each entry area.
+  const double area = geometry.coreArea + geometry.bypassArea;
+  const double impulse = core.W * V5 + sign * nozzle.grossThrust + Ps * area;
+  // Mixed-out state: (I - W V) V / (R T(V)) = W on the subsonic branch.
+  const double R = gas.R(m.c);
+  double Tstar, xstar, gstar;
+  if (!SonicState(gas, m.c, m.Tt, Tstar, xstar, gstar)) return r;
+  const double vMax = std::sqrt(gas.Gamma(m.c, Tstar) * R * Tstar);
+  double low = 0.0, high = vMax, T = m.Tt;
+  double V = std::min(0.9 * vMax, m.W * R * m.Tt * area / (impulse * area));
+  const auto f = [&](double v, double& t) {
+    if (!gas.TemperatureFromH(m.c, m.ht - 0.5 * v * v, t, t)) return std::nan("");
+    return (impulse - m.W * v) * v / (R * t) - m.W;
+  };
+  double tHigh = Tstar;
+  const double fHigh = f(vMax, tHigh);
+  if (!(fHigh >= 0.0)) return r;          // the mixed duct cannot pass the flow
+  for (int i = 0; i < 60; ++i) {
+    const double fv = f(V, T);
+    if (!Finite(fv)) return r;
+    if (fv > 0.0) high = V; else low = V;
+    const double cp = gas.Cp(m.c, T);
+    const double slope = (impulse - 2.0 * m.W * V) / (R * T)
+      + (impulse - m.W * V) * V * V / (R * T * T * cp);
+    double next = slope > 0.0 ? V - fv / slope : 0.5 * (low + high);
+    if (!(next > low && next < high)) next = 0.5 * (low + high);
+    if (std::fabs(next - V) <= 1e-13 * vMax) { V = next; break; }
+    V = next;
+  }
+  if (!Finite(f(V, T))) return r;
+  const double P = (impulse - m.W * V) / area;
+  m.Pt = P * std::exp((gas.Phi(m.c, m.Tt) - gas.Phi(m.c, T)) / R);
+  r.out = m;
+  r.valid = Finite(m.Pt) && m.Pt > 0.0;
+  return r;
+}
+
 } // namespace TurbinePlant
 } // namespace JSBSim
