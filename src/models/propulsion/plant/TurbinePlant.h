@@ -377,7 +377,7 @@ struct Ledger {
   double rotorStoredJ = 0.0, solidStoredJ = 0.0, manifoldStoredJ = 0.0;
   double residualJ = 0.0, scaleJ = 0.0, relative = 0.0;
   double airInKg = 0.0, fuelInKg = 0.0, outKg = 0.0, dumpKg = 0.0, manifoldKg = 0.0;
-  double massResidualKg = 0.0, massRelative = 0.0;
+  double massResidualKg = 0.0, massRelative = 0.0, massScaleKg = 0.0;
   double unburnedOutKg = 0.0, burnedKg = 0.0;
   double cumulativeResidualJ = 0.0, cumulativeScaleJ = 0.0;
   double cumulativeMassResidualKg = 0.0, cumulativeMassScaleKg = 0.0;
@@ -385,7 +385,10 @@ struct Ledger {
 };
 
 struct NumericalStatus {
-  int algorithm = 0;           ///< algorithm that produced the accepted solution
+  int algorithm = 0;           ///< algorithm that produced the published gas-path outputs
+  int stepAlgorithm = -1;      ///< algorithm that integrated the accepted step; -1 at zero time
+  int stepIterations = 0, publicationIterations = 0; ///< Newton work, including failed attempts
+  int publicationFallbackReason = 0; ///< first publication attempt's failure, 0 when no retry
   int iterations = 0, residualEvaluations = 0, substeps = 0;
   double maxResidual = 0.0;
   bool converged = false;
@@ -408,6 +411,7 @@ struct PlantOutputs {
   OutletObservation nozzle, liftFan;
   std::array<OutletObservation, 2> rollPost{};
   double throatArea = 0.0, exitArea = 0.0, nozzlePosition = 0.0;
+  double throatCommand = 0.0;  ///< controller command after nozzle back-off, m^2
   double ramDragN = 0.0, capturedAirKgSec = 0.0, netThrustN = 0.0;
   double inletRamDragN = 0.0, liftFanRamDragN = 0.0; ///< parts of ramDragN, at each inlet
   double n1Percent = 0.0, n2Percent = 0.0, liftFanPercent = 0.0;
@@ -527,11 +531,14 @@ private:
   void ScaleFlowsBySpeed(double* x, double wLP, double wHP) const;
   bool SolveAt(Operating& op, const std::array<double, 5>& guess, Algorithm algorithm, GasPath& g,
                double* J, bool& jValid, double tolerance, int cap, int& iterations,
-               int& evaluations, double& norm) const;
+               int& evaluations, double& norm, int* failureReason = nullptr) const;
   bool StepOnce(const PlantInputs& in, const StepCommands& cmd, double dt, Algorithm algorithm,
                 int& iterations, int& evaluations, int cap);
   bool PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSensors, int& iterations,
-                  int& evaluations, int cap);
+                  int& evaluations, int cap, int& failureReason);
+  bool PublishWithFallback(const PlantInputs& in, Algorithm first, bool updateSensors,
+                           int& iterations, int& evaluations, int firstCap, int totalCap,
+                           int& failureReason);
   void Fill(const GasPath& g, const Operating& op, const PlantState& s, PlantOutputs& out) const;
   bool SolveSteady(const PlantInputs& in, bool thermalEquilibrium);
 };

@@ -903,4 +903,152 @@ public:
     TS_ASSERT(p.SelectAlgorithm(Algorithm::Reduced));   // 21 KiB of tables fit
     TS_ASSERT(p.SelectAlgorithm(Algorithm::Component));
   }
+
+  void testRefreshReportsTheAlgorithmAndWorkOfItsPublicationFallback()
+  {
+    Run run;
+    TS_ASSERT(run.StartRunning(0.8));
+    TS_ASSERT(run.Step());
+    TS_ASSERT_EQUALS(run.plant.Outputs().status.algorithm, static_cast<int>(Algorithm::Reduced));
+    const PlantState before = run.plant.State();
+    const double time = run.plant.time;
+    const double sequence = run.plant.Outputs().status.sequence;
+    // A changed atmosphere requires more than one Newton iteration. Refresh
+    // retries with its existing component budget, without integrating history.
+    PlantInputs refresh = run.in;
+    refresh.ambientPressure = refresh.totalPressure = 80000.0;
+    refresh.ambientTemperature = refresh.totalTemperature = 270.0;
+    run.plant.settings.iterationCap = 1;
+    TS_ASSERT(run.plant.Refresh(refresh));
+    const NumericalStatus& st = run.plant.Outputs().status;
+    TS_ASSERT_EQUALS(st.algorithm, static_cast<int>(Algorithm::Component));
+    TS_ASSERT_EQUALS(st.stepAlgorithm, -1);
+    TS_ASSERT_EQUALS(st.fallbackReason, 1);
+    TS_ASSERT_EQUALS(st.publicationFallbackReason, 1);
+    TS_ASSERT_EQUALS(st.stepIterations, 0);
+    TS_ASSERT_EQUALS(st.iterations, st.publicationIterations);
+    TS_ASSERT_LESS_THAN(1, st.publicationIterations);
+    TS_ASSERT(st.converged);
+    TS_ASSERT(!st.failure);
+    TS_ASSERT_EQUALS(st.sequence, sequence);
+    TS_ASSERT_EQUALS(run.plant.time, time);
+    std::vector<double> oldRecord(StateRecordSize(before.solids.size()));
+    std::vector<double> newRecord(oldRecord.size());
+    PackState(before, oldRecord.data());
+    PackState(run.plant.State(), newRecord.data());
+    for (std::size_t i = 0; i < oldRecord.size(); ++i) TS_ASSERT_EQUALS(newRecord[i], oldRecord[i]);
+    // A later ordinary refresh clears this call's fallback receipt.
+    run.plant.settings.iterationCap = 24;
+    TS_ASSERT(run.plant.Refresh(refresh));
+    TS_ASSERT_EQUALS(st.algorithm, static_cast<int>(Algorithm::Reduced));
+    TS_ASSERT_EQUALS(st.fallbackReason, 0);
+    TS_ASSERT_EQUALS(st.publicationFallbackReason, 0);
+  }
+
+  void testFailedPublicationCountsItsWorkAndKeepsTheAcceptedState()
+  {
+    Run run(true);
+    run.in.dt = 0.05;
+    TS_ASSERT(run.StartRunning(0.9));
+    run.in.clutchCommand = run.in.doorCommand = 1.0;
+    run.in.rollPostCommand = {{1.0, 1.0}};
+    run.in.liftSplit = 0.42;
+    TS_ASSERT(run.plant.Steady(run.in));
+    const PlantState before = run.plant.State();
+    const double time = run.plant.time;
+    const double sequence = run.plant.Outputs().status.sequence;
+    // The split cut integrates within four iterations, then publication
+    // exhausts the remaining one. No integrated state may leak through.
+    run.in.liftSplit = 0.3;
+    run.in.throttle = 1.0;
+    run.plant.settings.iterationCap = 5;
+    TS_ASSERT(!run.plant.Advance(run.in));
+    const NumericalStatus& st = run.plant.Outputs().status;
+    TS_ASSERT(st.failure);
+    TS_ASSERT(!st.converged);
+    TS_ASSERT(!run.plant.Outputs().valid);
+    TS_ASSERT(!run.plant.Outputs().ledger.valid);
+    TS_ASSERT_EQUALS(st.stepAlgorithm, -1);
+    TS_ASSERT_LESS_THAN(0, st.stepIterations);
+    TS_ASSERT_LESS_THAN(0, st.publicationIterations);
+    TS_ASSERT_EQUALS(st.iterations, st.stepIterations + st.publicationIterations);
+    TS_ASSERT_EQUALS(st.iterations, run.plant.settings.iterationCap);
+    TS_ASSERT_EQUALS(st.fallbackReason, 1);
+    TS_ASSERT_EQUALS(st.sequence, sequence);
+    TS_ASSERT_EQUALS(run.plant.time, time);
+    TS_ASSERT_EQUALS(st.nozzleBackoff, 0.25);
+    std::vector<double> oldRecord(StateRecordSize(before.solids.size()));
+    std::vector<double> newRecord(oldRecord.size());
+    PackState(before, oldRecord.data());
+    PackState(run.plant.State(), newRecord.data());
+    for (std::size_t i = 0; i < oldRecord.size(); ++i) TS_ASSERT_EQUALS(newRecord[i], oldRecord[i]);
+    // Retry is bounded and advances exactly one accepted step.
+    run.plant.settings.iterationCap = 24;
+    run.plant.ClearNumericalFailure();
+    TS_ASSERT(run.plant.Advance(run.in));
+    TS_ASSERT(st.converged);
+    TS_ASSERT_EQUALS(st.sequence, sequence + 1.0);
+    TS_ASSERT_EQUALS(st.iterations, st.stepIterations + st.publicationIterations);
+    TS_ASSERT_LESS_THAN_EQUALS(st.iterations, run.plant.settings.iterationCap);
+    TS_ASSERT_EQUALS(st.nozzleBackoff, 0.5);
+    TS_ASSERT_LESS_THAN_EQUALS(run.plant.Outputs().throatCommand, run.plant.Design().throatMax);
+    TS_ASSERT_LESS_THAN_EQUALS(run.plant.Design().throatMin, run.plant.Outputs().throatCommand);
+  }
+
+  void testFullDemandLiftEquilibriumSurvivesBothSpoolPerturbationsForSixtySeconds()
+  {
+    // Synthetic engine, not F135 identification: this full-demand point is
+    // admitted under the N2 limiter. Engineering gates are <.001 percentage
+    // point spool ripple and <.01% design-thrust ripple in the final 30 s,
+    // <.01 percentage point final speed error, and independent ledger bounds.
+    for (const Algorithm algorithm : {Algorithm::Reduced, Algorithm::Component}) {
+      for (const double perturbation : {0.0, -0.005, 0.005}) {
+        Run run(true);
+        run.plant.SelectAlgorithm(algorithm);
+        run.in.clutchCommand = run.in.doorCommand = 1.0;
+        run.in.rollPostCommand = {{1.0, 1.0}};
+        run.in.liftSplit = 0.42;
+        TS_ASSERT(run.StartRunning(1.0));
+        const PlantOutputs equilibrium = run.plant.Outputs();
+        PlantState displaced = run.plant.State();
+        displaced.omegaLP *= 1.0 + perturbation;
+        displaced.omegaHP *= 1.0 + perturbation;
+        displaced.omegaLF *= 1.0 + perturbation;
+        TS_ASSERT(run.plant.RestoreState(displaced));
+        std::array<double, 4> low{{1e99, 1e99, 1e99, 1e99}}, high{{0, 0, 0, 0}};
+        for (int i = 0; i < 7200; ++i) {
+          const bool accepted = run.Step();
+          TS_ASSERT(accepted);
+          if (!accepted) break;
+          const PlantOutputs& out = run.plant.Outputs();
+          const NumericalStatus& st = out.status;
+          TS_ASSERT_EQUALS(st.stepAlgorithm, static_cast<int>(algorithm));
+          TS_ASSERT_EQUALS(st.algorithm, static_cast<int>(algorithm));
+          TS_ASSERT_EQUALS(st.sequence, static_cast<double>(i + 1));
+          TS_ASSERT_EQUALS(st.iterations, st.stepIterations + st.publicationIterations);
+          TS_ASSERT_LESS_THAN_EQUALS(st.iterations, run.plant.settings.iterationCap);
+          if (i >= 3600) {
+            const double values[4] = {out.n1Percent, out.n2Percent, out.nozzle.grossThrust,
+                                      out.liftFan.grossThrust};
+            for (int j = 0; j < 4; ++j) {
+              low[j] = std::min(low[j], values[j]); high[j] = std::max(high[j], values[j]);
+            }
+          }
+        }
+        TS_ASSERT(!run.failed);
+        TS_ASSERT_LESS_THAN(high[0] - low[0], 1e-3);
+        TS_ASSERT_LESS_THAN(high[1] - low[1], 1e-3);
+        TS_ASSERT_LESS_THAN(high[2] - low[2], 1e-4 * run.plant.Design().thrust);
+        TS_ASSERT_LESS_THAN(high[3] - low[3], 1e-4 * run.plant.Design().thrust);
+        TS_ASSERT_DELTA(run.plant.Outputs().n1Percent, equilibrium.n1Percent, 0.01);
+        TS_ASSERT_DELTA(run.plant.Outputs().n2Percent, equilibrium.n2Percent, 0.01);
+        TS_ASSERT_LESS_THAN(RelativeError(run.plant.Outputs().nozzle.grossThrust,
+                                         equilibrium.nozzle.grossThrust), 1e-4);
+        TS_ASSERT_DELTA(run.plant.Outputs().liftFan.grossThrust
+                         / run.plant.Outputs().nozzle.grossThrust, run.in.liftSplit, 1e-3);
+        TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
+        TS_ASSERT_LESS_THAN_EQUALS(run.worstMass, 1e-6);
+      }
+    }
+  }
 };

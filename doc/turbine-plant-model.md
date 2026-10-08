@@ -105,6 +105,13 @@ core fuel, throat area and the lift-fan speed.
   the split trim's) for the next step; each accepted step doubles it back
   (`numerics/nozzle-backoff`). A nozzle commanded beyond where the gas path
   has a solution stops there instead of freezing the engine.
+- Integration and end-state publication report their Newton work separately,
+  including unsuccessful attempts. `numerics/algorithm` names the algorithm
+  that produced the published gas-path outputs; `numerics/step-algorithm`
+  names the one that integrated the accepted step. A reduced step may publish
+  with the component reference, and its publication fallback is reported even
+  when integration needed no fallback. Failed publication keeps the accepted
+  state and counts its work against the same step cap.
 - Zero-time calls (run_ic, trim, suspended integration) solve the steady
   operating point at the present controls for a running, fuelled, unstalled
   engine, and otherwise only refresh outputs from the unchanged state
@@ -127,6 +134,18 @@ same for mass. Fuel debited from the tanks is exactly `ledger/fuel-in-kg`:
 the engine meters against `FGPropulsion::AvailableFuel()` (the selected feed
 tanks of the first priority that has fuel) and the debit is spread over those
 tanks without loss.
+
+The read-only mass receipt publishes `ledger/air-in-kg`, `fuel-in-kg`,
+`outflow-kg`, `dump-kg`, and signed `manifold-stored-kg`, plus signed
+`mass-residual-kg` and the nonnegative `mass-scale-kg`. Independently reconstruct
+the residual as manifold storage minus air and fuel in plus outflow and dump.
+The normalization divides its absolute value by `max(1e-9, mass-scale-kg)`.
+The scale sums inflow, outflow, dump and absolute manifold storage changes
+over every substep; with one substep it is the sum of those published terms
+(taking the absolute value of storage). With several substeps the signed net
+storage may hide opposing changes, so the published scale retains their full
+sum. `cumulative-mass-residual-kg` and `cumulative-mass-scale-kg` accumulate these
+accepted step receipts only. Repeated reads and zero-time calls add no mass.
 
 ## Configuration
 
@@ -202,10 +221,19 @@ Under `propulsion/engine[n]/plant/`, all read-only unless marked:
   turbine-exit temperature, 5 idle, 6 start, 7 off), `split-trim`,
   `split-vane`, and the actuator positions `clutch`, `lift-nozzle`,
   `roll-post[0]`, `roll-post[1]`.
+  `throat-command-sq-m` is the controller's throat command after numerical
+  nozzle back-off; at zero time it is the unchanged or solved throat area.
 - `station/<st2|st21|...|liftfan-exit>/` total temperature and pressure, mass
   flow, fuel-air ratio, unburned fraction.
 - `shaft/`, `fuel/`, `combustion/`, `solid/<name>/`, `ledger/`, `numerics/`,
   `events/` as named in `FGTurbinePlant.cpp`.
+- `numerics/step-algorithm` is -1 when no step was accepted by the current call,
+  including zero-time calls. `step-iterations` and `publication-iterations`
+  sum to `iterations` for an attempted transient step; a refresh has only
+  publication work. `publication-fallback-reason` uses the same codes as
+  `fallback-reason` and records the first publication failure when it was
+  retried with the component reference. A failed publication clears `converged`
+  and invalidates the current ledger; sequence and accepted time do not advance.
 - `settings/` (read-write, validated, applied at the next step): `algorithm`
   (0 component reference, 1 reduced), `iteration-cap` (1..32, default 24),
   `subdivision-cap` (1..16, default 4), `tolerance` (1e-9..1e-3, default 1e-6),
@@ -230,6 +258,11 @@ station 5), `augmentation` (augmentor fuel is burning), `nozzle-pos-norm`,
 `thermal/afterburner-burned-fuel-flow-kg-sec`, and for each solid
 `thermal/[<name>/]metal-temperature-k`, `metal-temperature-state-k`
 (read-write) and `initialized`; the first solid is also the unnamed wall.
+
+`fuel-flow-rate-pps` is the accepted step's mean metered flow in lb/s, or the
+steady metered flow on a zero-time call. It is published with the engine
+observations even when fuel is frozen; freezing tank debit does not freeze the
+flow observer. The separate `fuel-used-lbs` observation accumulates debited fuel.
 
 ## Lifecycle
 
@@ -262,6 +295,14 @@ with the throat at its minimum, and by the throat with the vanes open; the
 steady solve finds the same points, and a cut in the split is taken by the
 vanes within 0.5 s. With the LP speed limit, the overspeed of an unloading
 lift fan beyond the limit is less than half of that without it.
+
+The synthetic fully converted fixture also holds full demand for 60 seconds
+after 0 and both signs of a 0.5% spool-speed perturbation, with the component
+and reduced algorithms. Its final 30-second spool ripple is below .001
+percentage point, outlet thrust ripple below .01% of design thrust, and final
+speeds within .01 percentage point of the steady point; independent per-step
+ledger bounds remain 1e-5 energy and 1e-6 mass. This synthetic point is N2
+limited; it is a controller regression, not F135 or free-flight qualification.
 
 ## Limits
 

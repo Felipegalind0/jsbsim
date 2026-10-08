@@ -136,6 +136,7 @@ const ValueSpec kValues[] = {
   PV("control/limiter", s.control.limiter),
   PV("control/split-trim", s.control.splitTrim),
   PV("control/split-vane", s.control.splitVane),
+  PV("control/throat-command-sq-m", o.throatCommand),
   PV("control/clutch", s.clutch),
   PV("control/lift-nozzle", s.door),
   PV("control/roll-post[0]", s.rollPost[0]),
@@ -159,14 +160,26 @@ const ValueSpec kValues[] = {
   PV("ledger/energy-scale-j", o.ledger.scaleJ),
   PV("ledger/energy-relative", o.ledger.relative),
   PV("ledger/mass-relative", o.ledger.massRelative),
+  PV("ledger/air-in-kg", o.ledger.airInKg),
   PV("ledger/fuel-in-kg", o.ledger.fuelInKg),
+  PV("ledger/outflow-kg", o.ledger.outKg),
+  PV("ledger/dump-kg", o.ledger.dumpKg),
+  PV("ledger/manifold-stored-kg", o.ledger.manifoldKg),
+  PV("ledger/mass-residual-kg", o.ledger.massResidualKg),
+  PV("ledger/mass-scale-kg", o.ledger.massScaleKg),
   PV("ledger/burned-kg", o.ledger.burnedKg),
   PV("ledger/unburned-out-kg", o.ledger.unburnedOutKg),
   PV("ledger/cumulative-energy-residual-j", o.ledger.cumulativeResidualJ),
   PV("ledger/cumulative-energy-scale-j", o.ledger.cumulativeScaleJ),
+  PV("ledger/cumulative-mass-residual-kg", o.ledger.cumulativeMassResidualKg),
+  PV("ledger/cumulative-mass-scale-kg", o.ledger.cumulativeMassScaleKg),
   PV("ledger/valid", Flag(o.ledger.valid)),
   PV("numerics/valid", Flag(o.valid)),
   PV("numerics/algorithm", o.status.algorithm),
+  PV("numerics/step-algorithm", o.status.stepAlgorithm),
+  PV("numerics/step-iterations", o.status.stepIterations),
+  PV("numerics/publication-iterations", o.status.publicationIterations),
+  PV("numerics/publication-fallback-reason", o.status.publicationFallbackReason),
   PV("numerics/iterations", o.status.iterations),
   PV("numerics/residual-evaluations", o.status.residualEvaluations),
   PV("numerics/substeps", o.status.substeps),
@@ -367,6 +380,11 @@ void FGTurbine::PublishPlant(void)
     Cranking = s.starter;
     if (Running) Starter = false;       // as the empirical engine releases it
     FuelFlow_pph = o.totalMeteredKgSec / kKgPerLb * 3600.0;
+    // Publication, not tank debit, owns the public flow observer. Frozen
+    // fuel and zero-time calls skip ConsumeFuel but still have a fuel flow.
+    FuelFlowRate = o.ledger.valid && o.status.stepSeconds > 0.0
+      ? o.ledger.fuelInKg / o.status.stepSeconds / kKgPerLb
+      : o.totalMeteredKgSec / kKgPerLb;
     EGT_degC = o.egtGaugeK - 273.15;
     NozzlePosition = o.nozzlePosition;
     Augmentation = o.abSelected;

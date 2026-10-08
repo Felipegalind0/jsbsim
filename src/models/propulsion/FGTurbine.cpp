@@ -465,7 +465,8 @@ double FGTurbine::CalcFuelNeed(void)
     // Exactly the fuel the plant metered over the accepted step, already
     // limited to what the feed tanks could deliver.
     FuelExpended = PlantStepFuelLbs();
-    FuelFlowRate = in.TotalDeltaT > 0.0 ? FuelExpended / in.TotalDeltaT : 0.0;
+    // The accepted-state flow observer was already refreshed by PublishPlant,
+    // including calls for which fuel is frozen or no time advances.
     if (!Starved) FuelUsedLbs += FuelExpended;
     return FuelExpended;
   }

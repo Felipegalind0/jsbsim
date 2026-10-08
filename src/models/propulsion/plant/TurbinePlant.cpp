@@ -1413,23 +1413,33 @@ double Plant::ExitAreaRatio(double throatArea) const
 
 bool Plant::SolveAt(Operating& op, const std::array<double, 5>& guess, Algorithm algorithm,
                     GasPath& g, double* J, bool& jValid, double tolerance, int cap,
-                    int& iterations, int& evaluations, double& norm) const
+                    int& iterations, int& evaluations, double& norm, int* failureReason) const
 {
+  if (failureReason) *failureReason = 0;
   double x[kPathUnknowns] = {guess[0], guess[1], guess[2], guess[3], guess[4]};
   const double lower[kPathUnknowns] = {0.0, -1e3, -1e3, 0.0, 0.0};
   SeedFlows(x, op.wLP / config_.lp.designSpeed, op.wHP / config_.hp.designSpeed, op.Pt0 - op.p0);
   const auto f = [&](const double* y, double* r) { return EvaluatePath(op, y, g, r); };
   double r0[kPathUnknowns];
-  if (!FeasibleStart(f, x, r0, evaluations)) return false;
+  if (!FeasibleStart(f, x, r0, evaluations)) {
+    if (failureReason) *failureReason = 2;
+    return false;
+  }
   const NewtonResult result = RegimeNewton(f, kPathUnknowns, x, lower, tolerance, cap, J, jValid,
                                            algorithm == Algorithm::Reduced, iterations, evaluations,
                                            op, g);
   norm = result.norm;
-  if (result.status != 0) return false;
+  if (result.status != 0) {
+    if (failureReason) *failureReason = result.status;
+    return false;
+  }
   // The last evaluation is the accepted point unless the start converged.
   double r[kPathUnknowns];
   ++evaluations;
-  if (!EvaluatePath(op, x, g, r)) return false;
+  if (!EvaluatePath(op, x, g, r)) {
+    if (failureReason) *failureReason = 2;
+    return false;
+  }
   norm = MaxAbs(r, kPathUnknowns);
   return true;
 }
@@ -1753,7 +1763,7 @@ bool Plant::StepOnce(const PlantInputs& in, const StepCommands& cmd, double dt, 
 }
 
 bool Plant::PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSensors,
-                       int& iterations, int& evaluations, int cap)
+                       int& iterations, int& evaluations, int cap, int& failureReason)
 {
   Operating op;
   OperatingFromState(state_, in, algorithm, op);
@@ -1768,7 +1778,7 @@ bool Plant::PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSe
                                state_.flows[2] / bypassScale, state_.flows[4], state_.flows[5]}};
   ScaleFlowsBySpeed(guess.data(), state_.omegaLP, state_.omegaHP);
   if (!SolveAt(op, guess, algorithm, g, endJacobian_.data(), jValid, settings.tolerance, cap,
-               iterations, evaluations, norm)) {
+               iterations, evaluations, norm, &failureReason)) {
     endJacobianValid_ = false;
     return false;
   }
@@ -1800,6 +1810,30 @@ bool Plant::PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSe
   return true;
 }
 
+bool Plant::PublishWithFallback(const PlantInputs& in, Algorithm first, bool updateSensors,
+                                int& iterations, int& evaluations, int firstCap, int totalCap,
+                                int& failureReason)
+{
+  NumericalStatus& st = out_.status;
+  st.publicationFallbackReason = 0;
+  const int before = iterations;
+  bool published = PublishEnd(in, first, updateSensors, iterations, evaluations, firstCap,
+                              failureReason);
+  Algorithm used = first;
+  const int left = totalCap - (iterations - before);
+  // A transient shares one cap across both algorithms. A zero-time refresh
+  // retains its separate component retry budget, even when component was first.
+  if (!published && left >= 1 && (first == Algorithm::Reduced || totalCap > firstCap)) {
+    st.publicationFallbackReason = failureReason;
+    used = Algorithm::Component;
+    const int retryCap = totalCap > firstCap ? std::min(left, totalCap - firstCap) : left;
+    published = PublishEnd(in, used, updateSensors, iterations, evaluations, retryCap, failureReason);
+  }
+  st.publicationIterations = iterations - before;
+  if (published) st.algorithm = static_cast<int>(used);
+  return published;
+}
+
 bool Plant::Advance(const PlantInputs& in)
 {
   // Solids not yet established follow the local ambient until an accepted
@@ -1815,7 +1849,7 @@ bool Plant::Advance(const PlantInputs& in)
     // No steady point at these controls (or an engine that is not running):
     // outputs follow the unchanged state, and the status says so.
     const bool refreshed = Refresh(in);
-    out_.status.fallbackReason = eligible ? 5 : 0;
+    if (eligible) out_.status.fallbackReason = 5;
     return refreshed;
   }
   if (out_.status.failure) return false;
@@ -1835,6 +1869,10 @@ bool Plant::Advance(const PlantInputs& in)
   lastStarterTorque_ = cmd.starterTorque;
   out_.coreCommandKgSec = cmd.core;
   out_.abCommandKgSec = cmd.ab;
+  out_.throatCommand = cmd.throat;
+  out_.status.stepIterations = 0;
+  out_.status.publicationIterations = 0;
+  out_.status.publicationFallbackReason = 0;
   retry_ = trial_;
   const int eventsBefore = eventCount_;
   const bool lastStarvedBefore = lastStarved_;
@@ -1844,6 +1882,7 @@ bool Plant::Advance(const PlantInputs& in)
     first = Algorithm::Component;
     out_.status.fallbackReason = 4;
   }
+  const int budgetFallback = first != settings.requested ? 4 : 0;
   const Algorithm order[2] = {first, Algorithm::Component};
   const int attempts = first == Algorithm::Reduced ? 2 : 1;
   // Hard work bound: every Newton iteration of the step, fallbacks and the
@@ -1880,31 +1919,35 @@ bool Plant::Advance(const PlantInputs& in)
     eventCount_ = eventsAtStart;
     lastStarved_ = lastStarvedBefore;
     out_.status.failure = true;
+    out_.status.converged = false;
     out_.status.fallbackReason = reason;
     out_.status.iterations = iterations;
+    out_.status.residualEvaluations = evaluations;
+    out_.status.substeps = 0;
+    out_.status.stepAlgorithm = -1;
+    out_.ledger.valid = false;
     out_.valid = false;
     RecordEvent(time, 10);
     return false;
   };
+  out_.status.stepIterations = iterations;
   if (!done) return fail(fallback);
   previous_ = state_;
   state_ = trial_;
-  int endIterations = 0;
-  const bool published = PublishEnd(in, used, true, endIterations, evaluations, cap - iterations)
-    || (used == Algorithm::Reduced && cap - iterations - endIterations >= 1
-        && PublishEnd(in, Algorithm::Component, true, endIterations, evaluations,
-                      cap - iterations - endIterations));
+  int publicationFailure = 0;
+  const bool published = PublishWithFallback(in, used, true, iterations, evaluations,
+                                            cap - iterations, cap - iterations, publicationFailure);
   if (!published) {
     state_ = previous_;    // the last accepted state is kept
-    return fail(1);
+    return fail(publicationFailure);
   }
   time += in.dt;
   sequence_ += 1.0;
   nozzleBackoff_ = std::min(1.0, 2.0 * nozzleBackoff_);
   out_.status.nozzleBackoff = nozzleBackoff_;
-  iterations += endIterations;
   Ledger& L = stepLedger_;
   const double massScale = L.massRelative;
+  L.massScaleKg = massScale;
   L.relative = std::fabs(L.residualJ) / std::max(1.0, L.scaleJ);
   L.massRelative = std::fabs(L.massResidualKg) / std::max(1e-9, massScale);
   L.cumulativeResidualJ = out_.ledger.cumulativeResidualJ + L.residualJ;
@@ -1914,12 +1957,13 @@ bool Plant::Advance(const PlantInputs& in)
   L.valid = true;
   out_.ledger = L;
   NumericalStatus& st = out_.status;
-  st.algorithm = static_cast<int>(used);
+  st.stepAlgorithm = static_cast<int>(used);
   st.iterations = iterations;
   st.residualEvaluations = evaluations;
   st.substeps = substeps;
   st.converged = true;
-  st.fallbackReason = used == first ? (st.fallbackReason == 4 ? 4 : 0) : fallback;
+  st.fallbackReason = st.publicationFallbackReason != 0 ? st.publicationFallbackReason
+    : used != first ? fallback : budgetFallback;
   st.domainClamps = referenceGas_.domainClamps + tabulatedGas_.domainClamps;
   st.residentBytes = static_cast<double>(used == Algorithm::Reduced ? tabulatedGas_.ResidentBytes() : 0)
     + sizeof(jacobian_) + sizeof(endJacobian_);
@@ -1935,20 +1979,27 @@ bool Plant::Refresh(const PlantInputs& in)
 {
   int iterations = 0, evaluations = 0;
   const Algorithm algorithm = settings.requested;
-  if (!PublishEnd(in, algorithm, false, iterations, evaluations, settings.iterationCap)
-      && !PublishEnd(in, Algorithm::Component, false, iterations, evaluations, 32)) {
-    out_.valid = false;
-    return false;
-  }
+  int failureReason = 0;
+  const bool published = PublishWithFallback(in, algorithm, false, iterations, evaluations,
+                                            settings.iterationCap, settings.iterationCap + 32,
+                                            failureReason);
   out_.ledger = Ledger();
   out_.ledger.cumulativeResidualJ = 0.0;
   out_.status.iterations = iterations;
+  out_.status.stepAlgorithm = -1;
+  out_.status.stepIterations = 0;
   out_.status.residualEvaluations = evaluations;
   out_.status.stepSeconds = 0.0;
+  out_.status.substeps = 0;
+  out_.status.converged = published;
+  out_.status.failure = !published;
+  out_.status.fallbackReason = published ? out_.status.publicationFallbackReason : failureReason;
   out_.status.time = time;
   out_.status.epoch = epoch_;
-  out_.valid = true;
-  return true;
+  out_.status.sequence = sequence_;
+  out_.throatCommand = state_.throatArea;
+  out_.valid = published;
+  return published;
 }
 
 bool Plant::Evaluate(const PlantState& state, const PlantInputs& in, PlantOutputs& out) const
@@ -2323,10 +2374,19 @@ bool Plant::SolveSteady(const PlantInputs& in, bool thermalEquilibrium)
   out_.status.residualEvaluations = evaluations;
   out_.status.maxResidual = MaxAbs(r, n);
   out_.status.converged = true;
+  out_.status.failure = false;
   out_.status.algorithm = static_cast<int>(algorithm);
+  out_.status.stepAlgorithm = -1;
+  out_.status.stepIterations = 0;
+  out_.status.publicationIterations = 0;
+  out_.status.publicationFallbackReason = 0;
+  out_.status.fallbackReason = 0;
+  out_.status.substeps = 0;
   out_.status.stepSeconds = 0.0;
   out_.status.time = time;
   out_.status.epoch = epoch_;
+  out_.status.sequence = sequence_;
+  out_.throatCommand = state_.throatArea;
   out_.valid = true;
   return true;
 }

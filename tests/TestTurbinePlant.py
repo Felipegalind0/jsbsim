@@ -120,7 +120,13 @@ class TestTurbinePlant(JSBSimTestCase):
     def test_observations_are_read_only_and_legacy_names_map_the_plant(self):
         fdm = self.fdm(throttle=0.5)
         for path in ("nozzle/gross-thrust-lbs", "station/st7/total-temperature-k",
-                     "fuel/ab-burned-kg-sec", "ledger/energy-relative", "numerics/iterations"):
+                     "fuel/ab-burned-kg-sec", "ledger/energy-relative", "numerics/iterations",
+                     "control/throat-command-sq-m", "numerics/step-algorithm",
+                     "numerics/step-iterations", "numerics/publication-iterations",
+                     "numerics/publication-fallback-reason", "ledger/air-in-kg",
+                     "ledger/outflow-kg", "ledger/dump-kg", "ledger/manifold-stored-kg",
+                     "ledger/mass-residual-kg", "ledger/mass-scale-kg",
+                     "ledger/cumulative-mass-residual-kg", "ledger/cumulative-mass-scale-kg"):
             node = fdm.get_property_manager().get_node(PLANT + path, False)
             self.assertIsNotNone(node, path)
             self.assertTrue(node.get_attribute(jsbsim.Attribute.READ))
@@ -142,6 +148,72 @@ class TestTurbinePlant(JSBSimTestCase):
             self.assertTrue(fdm.run())
             metered += fdm[PLANT + "ledger/fuel-in-kg"] / KG_PER_LB
         self.assertGreater(metered, 1.0)
+        self.assertAlmostEqual(before - self.tank_lbs(fdm), metered, delta=1e-9 * before)
+
+    def test_exported_mass_terms_reconstruct_step_and_cumulative_closure(self):
+        fdm = self.fdm(throttle=0.5)
+        fdm["forces/hold-down"] = 1
+        cumulative_residual = 0.0
+        cumulative_scale = 0.0
+        largest_storage = 0.0
+        for step in range(480):
+            fdm["fcs/throttle-cmd-norm"] = 0.8 if step < 240 else 0.2
+            self.assertTrue(fdm.run())
+            self.assertEqual(fdm[PLANT + "ledger/valid"], 1)
+            air = fdm[PLANT + "ledger/air-in-kg"]
+            fuel = fdm[PLANT + "ledger/fuel-in-kg"]
+            outflow = fdm[PLANT + "ledger/outflow-kg"]
+            dump = fdm[PLANT + "ledger/dump-kg"]
+            stored = fdm[PLANT + "ledger/manifold-stored-kg"]
+            largest_storage = max(largest_storage, abs(stored))
+            residual = stored - (air + fuel - outflow - dump)
+            self.assertAlmostEqual(fdm[PLANT + "ledger/mass-residual-kg"], residual, delta=1e-12)
+            scale = fdm[PLANT + "ledger/mass-scale-kg"]
+            # This fixture has one substep: abs(storage) equals the sum of
+            # absolute substep storage changes used by the native scale.
+            self.assertEqual(fdm[PLANT + "numerics/substeps"], 1)
+            self.assertAlmostEqual(scale, air + fuel + outflow + dump + abs(stored), delta=1e-12)
+            self.assertAlmostEqual(fdm[PLANT + "ledger/mass-relative"],
+                                   abs(residual) / max(1e-9, scale), delta=1e-12)
+            self.assertLess(abs(residual) / max(1e-9, scale), 1e-6)
+            cumulative_residual += residual
+            cumulative_scale += scale
+        self.assertGreater(largest_storage, 1e-6)
+        self.assertAlmostEqual(fdm[PLANT + "ledger/cumulative-mass-residual-kg"],
+                               cumulative_residual, delta=1e-10)
+        self.assertAlmostEqual(fdm[PLANT + "ledger/cumulative-mass-scale-kg"],
+                               cumulative_scale, delta=1e-10)
+
+    def test_fuel_flow_observer_updates_with_frozen_fuel_and_at_zero_time(self):
+        fdm = self.fdm(throttle=0.5)
+        fdm["forces/hold-down"] = 1
+        fdm["propulsion/fuel_freeze"] = 1
+        before = self.tank_lbs(fdm)
+        used_before = fdm[ENGINE + "fuel-used-lbs"]
+        # run_ic has no accepted time step: publish the steady metered rate.
+        self.assertGreater(fdm[ENGINE + "fuel-flow-rate-pps"], 0)
+        self.assertAlmostEqual(fdm[ENGINE + "fuel-flow-rate-pps"],
+                               fdm[PLANT + "fuel/total-metered-kg-sec"] / KG_PER_LB)
+        initial_flow = fdm[ENGINE + "fuel-flow-rate-pps"]
+        fdm["fcs/throttle-cmd-norm"] = 0.8
+        for _ in range(240):
+            self.assertTrue(fdm.run())
+            expected = (fdm[PLANT + "ledger/fuel-in-kg"]
+                        / fdm[PLANT + "numerics/step-seconds"] / KG_PER_LB)
+            self.assertGreater(expected, 0)
+            self.assertAlmostEqual(fdm[ENGINE + "fuel-flow-rate-pps"], expected, places=10)
+        self.assertNotAlmostEqual(fdm[ENGINE + "fuel-flow-rate-pps"], initial_flow, places=3)
+        self.assertEqual(self.tank_lbs(fdm), before)
+        self.assertEqual(fdm[ENGINE + "fuel-used-lbs"], used_before)
+        fdm["propulsion/fuel_freeze"] = 0
+        metered = 0.0
+        for _ in range(120):
+            self.assertTrue(fdm.run())
+            metered += fdm[PLANT + "ledger/fuel-in-kg"] / KG_PER_LB
+            self.assertAlmostEqual(fdm[ENGINE + "fuel-flow-rate-pps"],
+                                   fdm[PLANT + "ledger/fuel-in-kg"] / (1.0 / 120.0) / KG_PER_LB,
+                                   places=10)
+        self.assertGreater(metered, 0)
         self.assertAlmostEqual(before - self.tank_lbs(fdm), metered, delta=1e-9 * before)
 
     def test_starvation_never_debits_more_than_the_tanks_hold(self):
