@@ -1793,6 +1793,12 @@ bool Plant::PublishEnd(const PlantInputs& in, Algorithm algorithm, bool updateSe
 
 bool Plant::Advance(const PlantInputs& in)
 {
+  // Solids not yet established follow the local ambient until an accepted
+  // step or a warm initialization establishes them: a cold engine is at the
+  // temperature of where it stands, not of where it was loaded or reset.
+  if (Finite(in.ambientTemperature) && in.ambientTemperature > 0.0)
+    for (auto& solid : state_.solids)
+      if (!solid.initialized && !solid.warmPending) solid.temperature = in.ambientTemperature;
   if (!in.advance || !(in.dt > 0.0)) {
     const bool eligible = state_.coreFlame.lit && state_.running && !in.cutoff && !in.seized
       && !in.stalled && in.fuelSupplyKg > 0.0;
@@ -1866,6 +1872,7 @@ bool Plant::Advance(const PlantInputs& in)
     lastStarved_ = lastStarvedBefore;
     out_.status.failure = true;
     out_.status.fallbackReason = reason;
+    out_.status.iterations = iterations;
     out_.valid = false;
     RecordEvent(time, 10);
     return false;

@@ -546,6 +546,30 @@ public:
     TS_ASSERT_DELTA(o.nozzle.grossThrust, 0.0, 1e-9);
   }
 
+  void testColdSolidsFollowTheLocalAmbient()
+  {
+    Plant p;
+    TS_ASSERT(p.Load(Synthetic()));
+    PlantInputs in = SeaLevel(0.0);
+    in.ambientTemperature = in.totalTemperature = 250.0;
+    in.advance = false;
+    TS_ASSERT(p.Advance(in));   // zero-time, at rest: not established, at the local ambient
+    for (const SolidState& solid : p.State().solids) {
+      TS_ASSERT_EQUALS(solid.temperature, 250.0);
+      TS_ASSERT(!solid.initialized);
+    }
+    in.ambientTemperature = in.totalTemperature = 260.0;
+    in.advance = true;
+    TS_ASSERT(p.Advance(in));   // the first accepted step establishes them where they stand
+    for (const SolidState& solid : p.State().solids) {
+      TS_ASSERT(solid.initialized);
+      TS_ASSERT_DELTA(solid.temperature, 260.0, 0.5);
+    }
+    in.ambientTemperature = in.totalTemperature = 300.0;
+    TS_ASSERT(p.Advance(in));   // established solids exchange heat; they do not jump
+    for (const SolidState& solid : p.State().solids) TS_ASSERT_LESS_THAN(solid.temperature, 261.0);
+  }
+
   void testSeizureDissipatesRotorEnergy()
   {
     Run run;

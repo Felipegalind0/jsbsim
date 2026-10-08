@@ -166,7 +166,7 @@ the defaults in `TurbinePlant.h`. Tables are one `x y` pair per line.
     </lift-system>
     <augment-demand>property</augment-demand>  <!-- optional, overrides augmethod -->
     <throat-area-trim>property</throat-area-trim>  <!-- optional nozzle trim, 0.5..2 -->
-    <numerics><algorithm>reduced</algorithm><iteration-cap>16</iteration-cap></numerics>
+    <numerics><algorithm>reduced</algorithm><iteration-cap>24</iteration-cap></numerics>
   </plant>
 </turbine_engine>
 ```
@@ -196,10 +196,13 @@ Under `propulsion/engine[n]/plant/`, all read-only unless marked:
 - `shaft/`, `fuel/`, `combustion/`, `solid/<name>/`, `ledger/`, `numerics/`,
   `events/` as named in `FGTurbinePlant.cpp`.
 - `settings/` (read-write, validated, applied at the next step): `algorithm`
-  (0 component reference, 1 reduced), `iteration-cap` (1..32, default 16),
+  (0 component reference, 1 reduced), `iteration-cap` (1..32, default 24),
   `subdivision-cap` (1..16, default 4), `tolerance` (1e-9..1e-3, default 1e-6),
   `closure-budget-bytes` (65536..16 MiB, default 1 MiB; the reduced tables
   take 21 KiB). An invalid value is ignored.
+- The throttle is the FCS throttle position (`fcs/throttle-pos-norm[n]`), also
+  through set-running: `FGPropulsion::SetEngineRunning` forces its own copy of
+  the inputs to full throttle, which a plant engine does not take as a control.
 - `state/` (read-write): the full plant state as named numbers, preceded by
   `schema-version` and `config-digest`. Reading gives the accepted state.
   Writing stages a record; writing `state/commit` = 1 restores it after
@@ -224,7 +227,7 @@ station 5), `augmentation` (augmentor fuel is burning), `nozzle-pos-norm`,
 | Load | Derives the design point; an unrealizable design is a load error. Cold state at ambient. |
 | ResetToIC | Cold state; solids at ambient but not established. |
 | set-running (InitRunning) | Steady running point at the present controls; solids not yet established take their equilibrium there, established or restored solids keep their temperature. |
-| run_ic, trim, suspended integration | Steady point for a running eligible engine, otherwise refresh. |
+| run_ic, trim, suspended integration | Steady point for a running eligible engine, otherwise refresh. Solids not yet established follow the local ambient. |
 | Time step | Controller, fuel, actuators, flames, coupled solve, ledger, publication. |
 | Fuel frozen or trim | Unlimited supply, nothing debited. |
 | Starved | Supply zero: metering stops, flames blow out. |

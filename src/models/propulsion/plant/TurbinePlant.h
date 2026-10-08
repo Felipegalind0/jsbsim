@@ -338,9 +338,11 @@ struct PlantInputs {
 struct NumericalSettings {
   Algorithm requested = Algorithm::Reduced;
   /// 1..32 total Newton iterations per accepted step, all solves and fallback
-  /// included. Default 16, not the provisional 8: each accepted step needs a
-  /// midpoint and an end-state solve, and cranking/light-off need about ten.
-  int iterationCap = 16;
+  /// included. Default 24: each accepted step needs a midpoint and an
+  /// end-state solve, and the first step of an engine at rest in moving air
+  /// (flow growing as the square root of a tiny ram pressure) needs about 12
+  /// component iterations after the reduced attempt has spent its share.
+  int iterationCap = 24;
   int subdivisionCap = 4;          ///< 1..16 substeps on failure
   double tolerance = 1e-6;         ///< 1e-9..1e-3 scaled residual
   double closureBudgetBytes = 1048576.0; ///< 64 KiB..16 MiB

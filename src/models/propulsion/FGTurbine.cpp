@@ -46,6 +46,7 @@ INCLUDES
 #include <sstream>
 
 #include "FGFDMExec.h"
+#include "models/FGFCS.h"
 #include "math/FGFunction.h"
 #include "math/FGRealValue.h"
 #include "math/FGParameterValue.h"
@@ -132,7 +133,11 @@ void FGTurbine::Calculate(void)
 
   RunPreFunctions();
 
-  ThrottlePos = in.ThrottlePos[EngineNumber];
+  // A plant engine runs on the FCS throttle position. FGPropulsion's
+  // SetEngineRunning forces its own copy to full throttle, which is not a
+  // control: it would put set-running at military power, or light an
+  // augmentor the FCS inhibits. On every normal step the two agree.
+  ThrottlePos = PlantModel ? FDMExec->GetFCS()->GetThrottlePos(EngineNumber) : in.ThrottlePos[EngineNumber];
 
   if (ThrottlePos > 1.0) {
     AugmentCmd = ThrottlePos - 1.0;
@@ -1040,7 +1045,7 @@ int FGTurbine::InitRunning(void)
     // A steady running operating point at the present controls; solids not
     // yet established take their equilibrium there.
     FDMExec->SuspendIntegration();
-    ThrottlePos = std::clamp(in.ThrottlePos[EngineNumber], 0.0, 1.0);
+    ThrottlePos = std::clamp(FDMExec->GetFCS()->GetThrottlePos(EngineNumber), 0.0, 1.0);
     Cutoff = false;
     InitializePlantRunning();
     Calculate();

@@ -48,7 +48,7 @@
     },
     "work_bound": {
       "definition": "Newton iterations per accepted step, every solve and fallback included",
-      "gate": "<= settings iteration-cap (default 16)"
+      "gate": "<= settings iteration-cap (default 24)"
     },
     "mixer_conservation": {
       "definition": "momentum mixer with a calorically perfect gas: relative error of mixed mass, total enthalpy and impulse (W V + Ps A) against the entering streams; uniform streams at one flux mix without loss; mixed entropy is at least the mass-weighted entering entropy",

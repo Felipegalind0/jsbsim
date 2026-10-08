@@ -202,15 +202,27 @@ class TestTurbinePlant(JSBSimTestCase):
 
     def test_settings_are_bounded(self):
         fdm = self.fdm(throttle=0.5)
-        self.assertEqual(fdm[PLANT + "settings/iteration-cap"], 16)
-        fdm[PLANT + "settings/iteration-cap"] = 40
-        self.assertEqual(fdm[PLANT + "settings/iteration-cap"], 16)
-        fdm[PLANT + "settings/iteration-cap"] = 24
         self.assertEqual(fdm[PLANT + "settings/iteration-cap"], 24)
+        fdm[PLANT + "settings/iteration-cap"] = 40
+        self.assertEqual(fdm[PLANT + "settings/iteration-cap"], 24)
+        fdm[PLANT + "settings/iteration-cap"] = 16
+        self.assertEqual(fdm[PLANT + "settings/iteration-cap"], 16)
         fdm[PLANT + "settings/algorithm"] = 0
         self.assertEqual(fdm[PLANT + "settings/algorithm"], 0)
         self.assertTrue(fdm.run())
         self.assertEqual(fdm[PLANT + "numerics/algorithm"], 0)
+
+    def test_set_running_keeps_the_pilots_throttle(self):
+        # set-running is a running engine at the FCS throttle, not at the
+        # full throttle FGPropulsion writes into its own copy of the inputs.
+        # The F16 FCS doubles the command: 0.25 is half the dry range.
+        fdm = self.fdm(throttle=0.25)
+        n1 = fdm[PLANT + "shaft/n1-percent"]
+        self.assertLess(n1, 95)
+        for _ in range(1200):
+            fdm.run()
+        self.assertAlmostEqual(fdm[PLANT + "shaft/n1-percent"], n1, delta=0.5)
+        self.assertEqual(fdm[PLANT + "combustion/ab-selected"], 0)
 
     def test_zero_time_calls_and_reset(self):
         fdm = self.fdm(throttle=0.5)
