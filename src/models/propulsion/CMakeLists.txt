@@ -8,13 +8,15 @@ set(SOURCES FGElectric.cpp
             FGTank.cpp
             FGThruster.cpp
             FGTurbine.cpp
+            FGTurbinePlant.cpp
             FGTurboProp.cpp
             FGTransmission.cpp
             FGRotor.cpp
             FGBrushLessDCMotor.cpp
             plant/TurbinePlantGas.cpp
             plant/TurbinePlantComponents.cpp
-            plant/TurbinePlant.cpp)
+            plant/TurbinePlant.cpp
+            plant/TurbinePlantXML.cpp)
 
 set(HEADERS FGElectric.h
             FGEngine.h
@@ -33,7 +35,8 @@ set(HEADERS FGElectric.h
 
 set(PLANT_HEADERS plant/TurbinePlantGas.h
                   plant/TurbinePlantComponents.h
-                  plant/TurbinePlant.h)
+                  plant/TurbinePlant.h
+                  plant/TurbinePlantXML.h)
 
 add_library(Propulsion OBJECT ${SOURCES})
 

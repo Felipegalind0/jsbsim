@@ -180,6 +180,15 @@ public:
 
   virtual double CalcOxidizerNeed(void) {return 0.0;}
 
+  /** Whether this engine meters fuel against the mass its feed tanks can
+      deliver this step. Such an engine receives SetFuelSupply() before
+      Calculate() and is debited exactly the fuel it reports, spread over its
+      feed tanks without loss. */
+  virtual bool UsesFuelSupply(void) const { return false; }
+  /** Fuel deliverable this step at the current feed priority, lbm; infinite
+      when fuel is frozen or the executive is trimming. */
+  virtual void SetFuelSupply(double) {}
+
   virtual double GetPowerAvailable(void) const {return 0.0;};
 
   virtual const FGColumnVector3& GetBodyForces(void);

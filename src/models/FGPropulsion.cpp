@@ -44,8 +44,10 @@ HISTORY
 INCLUDES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
+#include <algorithm>
 #include <iomanip>
 #include <array>
+#include <limits>
 
 #include "FGFDMExec.h"
 #include "FGPropulsion.h"
@@ -124,6 +126,7 @@ bool FGPropulsion::Run(bool Holding)
   vMoments.InitMatrix();
 
   for (auto& engine: Engines) {
+    if (engine->UsesFuelSupply()) engine->SetFuelSupply(AvailableFuel(engine.get()));
     engine->Calculate();
     ConsumeFuel(engine.get());
     vForces  += engine->GetBodyForces();  // sum body frame forces
@@ -246,6 +249,29 @@ void FGPropulsion::ConsumeFuel(FGEngine* engine)
   if (FuelStarved || (hasOxTanks && OxiStarved)) return;
 
   double FuelToBurn = engine->CalcFuelNeed();            // How much fuel does this engine need?
+  if (engine->UsesFuelSupply()) {
+    // The engine metered no more than AvailableFuel(): spread it so that a
+    // tank holding less than an equal share passes the rest to the others,
+    // and no metered fuel goes undebited.
+    double remaining = FuelToBurn;
+    for (int pass = 0; pass < 2 && remaining > 0.0; ++pass) {
+      size_t open = 0;
+      for (const auto& feed: FeedListFuel)
+        if (Tanks[feed]->GetContents() > Tanks[feed]->GetUnusable()) ++open;
+      if (open == 0) break;
+      const double share = remaining / open;
+      for (const auto& feed: FeedListFuel) {
+        const auto& tank = Tanks[feed];
+        const double usable = std::max(0.0, tank->GetContents() - tank->GetUnusable());
+        const double take = pass == 0 ? std::min(share, usable) : std::min(remaining, usable);
+        if (take <= 0.0) continue;
+        tank->Drain(take);
+        remaining -= take;
+        if (remaining <= 0.0) break;
+      }
+    }
+    return;
+  }
   double FuelNeededPerTank = FuelToBurn / TanksWithFuel; // Determine fuel needed per tank.
   for (const auto& feed: FeedListFuel)
     Tanks[feed]->Drain(FuelNeededPerTank);
@@ -258,6 +284,27 @@ void FGPropulsion::ConsumeFuel(FGEngine* engine)
       Tanks[feed]->Drain(OxidizerNeededPerTank);
   }
 
+}
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+double FGPropulsion::AvailableFuel(FGEngine* engine) const
+{
+  if (FuelFreeze || FDMExec->GetTrimStatus()) return std::numeric_limits<double>::infinity();
+  const size_t numTanks = Tanks.size();
+  for (unsigned int priority = 1; priority <= numTanks; ++priority) {
+    double usable = 0.0;
+    bool any = false;
+    for (unsigned int i = 0; i < engine->GetNumSourceTanks(); ++i) {
+      const auto& tank = Tanks[engine->GetSourceTank(i)];
+      if (tank->GetType() != FGTank::ttFUEL || tank->GetPriority() != priority
+          || !tank->GetSelected() || !(tank->GetContents() > tank->GetUnusable())) continue;
+      usable += tank->GetContents() - tank->GetUnusable();
+      any = true;
+    }
+    if (any) return usable;
+  }
+  return 0.0;
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

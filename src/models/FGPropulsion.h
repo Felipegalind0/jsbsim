@@ -201,6 +201,9 @@ private:
   double DumpRate;
   double RefuelRate;
   void ConsumeFuel(FGEngine* engine);
+  /** Usable fuel, lbm, in the selected feed tanks of the first priority that
+      has any; what ConsumeFuel() can draw from this step. */
+  double AvailableFuel(FGEngine* engine) const;
 
   bool ReadingEngine;
 

@@ -527,7 +527,9 @@ void Plant::InitializeCold(double ambientTemperature)
   const std::vector<SolidState> solids(config_.solids.size(), SolidState());
   state_ = PlantState();
   state_.solids = solids;
-  for (auto& s : state_.solids) { s.temperature = ambientTemperature; s.initialized = true; }
+  // Solids start at ambient but are not yet established: the first accepted
+  // step, a restored temperature or a warm initialization establishes them.
+  for (auto& s : state_.solids) { s.temperature = ambientTemperature; s.initialized = false; }
   state_.throatArea = std::clamp(design_.throatArea * config_.control.dryThroatArea(0.0),
                                  design_.throatMin, design_.throatMax);
   state_.control.egtGaugeK = ambientTemperature;
@@ -591,12 +593,97 @@ bool Plant::RestoreState(const PlantState& s, std::string* reason)
   return true;
 }
 
+bool Plant::SetSolidTemperature(std::size_t index, double kelvin)
+{
+  if (index >= state_.solids.size() || !Finite(kelvin) || !(kelvin > 0.0)) return false;
+  SolidState& solid = state_.solids[index];
+  solid.temperature = kelvin;
+  solid.initialized = true;
+  solid.warmPending = false;
+  return true;
+}
+
+namespace {
+const char* const kStateNames[kStateFixedFields] = {
+  "omega-lp-rad-sec", "omega-hp-rad-sec", "omega-lf-rad-sec", "clutch", "door",
+  "roll-post-0", "roll-post-1",
+  "core-metered-kg-sec", "core-manifold-kg", "core-spray-kg-sec",
+  "ab-metered-kg-sec", "ab-manifold-kg", "ab-spray-kg-sec",
+  "core-lit", "core-ignition-progress-s", "core-lit-fraction",
+  "ab-lit", "ab-ignition-progress-s", "ab-lit-fraction",
+  "throat-area-sq-m", "control-integrator", "control-ab-fuel-air", "control-ab-selected",
+  "control-igniter", "control-egt-gauge-k", "sensed-p3-pa", "sensed-t5-k", "sensed-t6-k",
+  "sensed-t7-k", "sensed-w3b-kg-sec", "sensed-air6-kg-sec", "sensed-w6-kg-sec",
+  "control-limiter", "running", "starter", "fuel-used-kg",
+  "warm-start-0", "warm-start-1", "warm-start-2", "warm-start-3", "warm-start-4", "warm-start-5"};
+} // namespace
+
+const char* StateRecordName(int index)
+{
+  return index >= 0 && index < kStateFixedFields ? kStateNames[index] : "";
+}
+
+void PackState(const PlantState& s, double* r)
+{
+  const ControllerState& c = s.control;
+  const double fixed[kStateFixedFields] = {
+    s.omegaLP, s.omegaHP, s.omegaLF, s.clutch, s.door, s.rollPost[0], s.rollPost[1],
+    s.core.metered, s.core.manifold, s.core.spray, s.ab.metered, s.ab.manifold, s.ab.spray,
+    s.coreFlame.lit ? 1.0 : 0.0, s.coreFlame.progress, s.coreFlame.fraction,
+    s.abFlame.lit ? 1.0 : 0.0, s.abFlame.progress, s.abFlame.fraction,
+    s.throatArea, c.integrator, c.abFuelAir, c.abSelected ? 1.0 : 0.0, c.igniter ? 1.0 : 0.0,
+    c.egtGaugeK, c.sensedP3, c.sensedT5, c.sensedT6, c.sensedT7, c.sensedW3b, c.sensedAir6,
+    c.sensedW6, static_cast<double>(c.limiter), s.running ? 1.0 : 0.0, s.starter ? 1.0 : 0.0,
+    s.fuelUsedKg, s.flows[0], s.flows[1], s.flows[2], s.flows[3], s.flows[4], s.flows[5]};
+  std::memcpy(r, fixed, sizeof(fixed));
+  for (std::size_t i = 0; i < s.solids.size(); ++i) {
+    r[kStateFixedFields + 2 * i] = s.solids[i].temperature;
+    r[kStateFixedFields + 2 * i + 1] = s.solids[i].initialized ? 1.0 : 0.0;
+  }
+}
+
+bool UnpackState(const double* r, std::size_t solids, PlantState& s)
+{
+  const int n = StateRecordSize(solids);
+  for (int i = 0; i < n; ++i) if (!Finite(r[i])) return false;
+  const auto flag = [&](int i, bool& out) {
+    if (r[i] != 0.0 && r[i] != 1.0) return false;
+    out = r[i] == 1.0;
+    return true;
+  };
+  ControllerState& c = s.control;
+  s.omegaLP = r[0]; s.omegaHP = r[1]; s.omegaLF = r[2]; s.clutch = r[3]; s.door = r[4];
+  s.rollPost = {{r[5], r[6]}};
+  s.core.metered = r[7]; s.core.manifold = r[8]; s.core.spray = r[9];
+  s.ab.metered = r[10]; s.ab.manifold = r[11]; s.ab.spray = r[12];
+  if (!flag(13, s.coreFlame.lit)) return false;
+  s.coreFlame.progress = r[14]; s.coreFlame.fraction = r[15];
+  if (!flag(16, s.abFlame.lit)) return false;
+  s.abFlame.progress = r[17]; s.abFlame.fraction = r[18];
+  s.throatArea = r[19]; c.integrator = r[20]; c.abFuelAir = r[21];
+  if (!flag(22, c.abSelected) || !flag(23, c.igniter)) return false;
+  c.egtGaugeK = r[24]; c.sensedP3 = r[25]; c.sensedT5 = r[26]; c.sensedT6 = r[27];
+  c.sensedT7 = r[28]; c.sensedW3b = r[29]; c.sensedAir6 = r[30]; c.sensedW6 = r[31];
+  if (!(r[32] >= 0.0 && r[32] <= 7.0 && r[32] == std::floor(r[32]))) return false;
+  c.limiter = static_cast<int>(r[32]);
+  if (!flag(33, s.running) || !flag(34, s.starter)) return false;
+  s.fuelUsedKg = r[35];
+  for (int i = 0; i < 6; ++i) s.flows[i] = r[36 + i];
+  s.solids.resize(solids);
+  for (std::size_t i = 0; i < solids; ++i) {
+    s.solids[i].temperature = r[kStateFixedFields + 2 * i];
+    if (!flag(kStateFixedFields + 2 * static_cast<int>(i) + 1, s.solids[i].initialized)) return false;
+    s.solids[i].warmPending = false;
+  }
+  return true;
+}
+
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 // Representative controller: min/max selection of governor errors with
 // acceleration/deceleration ratio-unit limits (cf. NASA C-MAPSS40k).
 
 void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, double& coreCmd,
-                             double& abCmd, double& starterTorque, double& throatCmd) const
+                             double& abCmd, double& starterTorque, double& throatCmd)
 {
   const ControllerConfig& c = config_.control;
   ControllerState& cs = s.control;
@@ -635,7 +722,7 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
   const bool wasSelected = cs.abSelected;
   cs.abSelected = config_.augmented && fuelAllowed && in.augmentDemand > 0.0 && s.coreFlame.lit
     && s.running && N2 >= c.abMinimumN2;
-  if (cs.abSelected != wasSelected) const_cast<Plant*>(this)->RecordEvent(time, cs.abSelected ? 7 : 8);
+  if (cs.abSelected != wasSelected) RecordEvent(time, cs.abSelected ? 7 : 8);
   if (!cs.abSelected) cs.abFuelAir = 0.0;
   else if (!s.abFlame.lit) cs.abFuelAir = c.abLightoffFuelAirRatio;
   else {
@@ -1627,6 +1714,7 @@ bool Plant::Advance(const PlantInputs& in)
   int iterations = 0, evaluations = 0;
   trial_ = state_;
   StepCommands cmd;
+  const int eventsAtStart = eventCount_;   // a failed step records no controller event
   UpdateController(in, trial_, in.dt, cmd.core, cmd.ab, cmd.starterTorque, cmd.throat);
   lastStarterTorque_ = cmd.starterTorque;
   out_.coreCommandKgSec = cmd.core;
@@ -1671,7 +1759,7 @@ bool Plant::Advance(const PlantInputs& in)
     if (!done) fallback = iterations >= budgetEnd ? 1 : 2;
   }
   const auto fail = [&](int reason) {
-    eventCount_ = eventsBefore;
+    eventCount_ = eventsAtStart;
     lastStarved_ = lastStarvedBefore;
     out_.status.failure = true;
     out_.status.fallbackReason = reason;
@@ -1779,7 +1867,7 @@ bool Plant::InitializeRunning(const PlantInputs& in)
   state_.coreFlame.progress = 0.0;
   state_.coreFlame.fraction = 1.0;
   state_.running = true;
-  for (auto& solid : state_.solids) solid.warmPending = true;
+  for (auto& solid : state_.solids) solid.warmPending = !solid.initialized;
   if (!SolveSteady(in, true)) { state_ = saved; return false; }
   return true;
 }

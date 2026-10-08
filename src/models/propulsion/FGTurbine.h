@@ -51,6 +51,8 @@ FORWARD DECLARATIONS
 namespace JSBSim {
 
 class FGFunction;
+class FGPropertyValue;
+namespace TurbinePlant { class Plant; struct PlantInputs; }
 
 /*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 CLASS DOCUMENTATION
@@ -204,11 +206,18 @@ public:
       @param el pointer to the XML element representing the turbine engine
       @param engine_number engine number  */
   FGTurbine(FGFDMExec* Executive, Element *el, int engine_number, struct Inputs& input);
+  ~FGTurbine();
 
   enum phaseType { tpOff, tpRun, tpSpinUp, tpStart, tpStall, tpSeize, tpTrim };
 
   void Calculate(void);
   double CalcFuelNeed(void);
+  /** An engine with a coupled <plant> meters fuel against the supply its
+      feed tanks can deliver this step and debits exactly what it metered. */
+  bool UsesFuelSupply(void) const { return PlantModel != nullptr; }
+  void SetFuelSupply(double lbs);
+  /** The coupled plant, or nullptr for an empirical turbine. */
+  const TurbinePlant::Plant* GetPlant(void) const;
   double GetPowerAvailable(void) const;
   /** A lag filter.
       Used to control the rate at which values are allowed to change.
@@ -394,6 +403,28 @@ private:
 
   bool Load(FGFDMExec *exec, Element *el);
   void LoadThermal(FGFDMExec* exec, Element* el);
+
+  // Coupled plant (opt-in <plant>): one native model of fuel, combustion,
+  // gas path, shafts, nozzle and solids replaces the empirical phases.
+  struct PlantAdapter;
+  struct PlantAdapterDeleter { void operator()(PlantAdapter* adapter) const; };
+  std::unique_ptr<PlantAdapter, PlantAdapterDeleter> PlantModel;
+  void LoadPlant(FGFDMExec* exec, Element* el);
+  void BindPlant(FGPropertyManager* pm);
+  double CalculatePlant(void);
+  void PublishPlant(void);
+  void FillPlantInputs(TurbinePlant::PlantInputs& inputs, bool advance) const;
+  double GetPlantValue(int index) const;
+  double GetPlantRecord(int index) const;
+  void SetPlantRecord(int index, double value);
+  double GetPlantSetting(int index) const;
+  void SetPlantSetting(int index, double value);
+  double GetPlantSolidTemperature(int index) const;
+  void SetPlantSolidTemperature(int index, double kelvin);
+  double GetPlantSolidInitialized(int index) const;
+  void ResetPlant(void);
+  void InitializePlantRunning(void);
+  double PlantStepFuelLbs(void) const;
   void UpdateThermal(void);
   void bindmodel(FGPropertyManager* pm);
   void Debug(int from);

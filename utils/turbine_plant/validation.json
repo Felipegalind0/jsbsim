@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "purpose": "Frozen metric definitions and gates for the coupled turbine plant. Numerical engineering targets, not measured engine error bounds.",
+  "metrics": {
+    "analytical_component": {
+      "definition": "|value - closed form| / |closed form| for nozzles (choked, subsonic, ideal, underexpanded, separated) and zero-speed turbomachinery with a calorically perfect gas",
+      "gate": 1e-8,
+      "test": "FGTurbinePlantTest::testConvergentNozzleChokedAnalytic and siblings"
+    },
+    "algebraic_residual": {
+      "definition": "max scaled residual of the accepted solve; pressures over the speed-similar gauge (design nozzle gauge x N1^2 + ram, floor 1e-3 p0), flows over design flows, torques over design turbine torque, turbine capacity fractions squared",
+      "gate": 1e-6
+    },
+    "energy_closure_step": {
+      "definition": "|stored - sources| / sum of absolute ledger terms, per accepted step",
+      "gate": 1e-5,
+      "absolute_floor_j": 1.0
+    },
+    "mass_closure_step": {
+      "definition": "|manifold change - (air in + fuel in - outflow - dump)| / sum of absolute mass terms, per accepted step",
+      "gate": 1e-6,
+      "absolute_floor_kg": 1e-9
+    },
+    "energy_closure_cumulative": {
+      "definition": "|sum of step residuals| / sum of step scales over a fixture interval",
+      "gate": 1e-6
+    },
+    "label_causality": {
+      "definition": "Evaluate() outputs at an identical physical state with only abSelected, abFuelAir command and augment demand changed",
+      "gate": "bit-identical gross thrust, augmentor heat release and station 7 temperature"
+    },
+    "augmentor_onset": {
+      "definition": "while augmentor burned fuel is zero: gross thrust minus that of the same state with augmentor spray removed",
+      "gate": "<= delivered augmentor spray x nozzle exit velocity + 1e-6 x dry thrust; station 7 temperature <= station 6 while the liner is colder than the gas",
+      "evidence": "replaces the expected failure recorded in 0sfs docs/validation/f135-ab-onset.md (4.1333 s of wet thrust with zero burned augmentor fuel)"
+    },
+    "reduced_vs_reference": {
+      "definition": "max over a dry acceleration and augmentor light-off of |reduced - component| gross thrust / design thrust, and station 7 temperature difference",
+      "gate": {"force_fraction": 0.01, "temperature_k": 5.0}
+    },
+    "event_timing": {
+      "definition": "first published augmentor burn minus the accepted light-off event time",
+      "gate_s": 0.008333333333333333
+    },
+    "timestep": {
+      "definition": "N1 and gross thrust at 0.5 s and 1.5 s of an idle-to-military acceleration at 60, 120 and 240 Hz against 1920 Hz",
+      "gate": {"n1_percent_points": 0.5, "force_fraction": 0.01}
+    },
+    "work_bound": {
+      "definition": "Newton iterations per accepted step, every solve and fallback included",
+      "gate": "<= settings iteration-cap (default 16)"
+    }
+  }
+}

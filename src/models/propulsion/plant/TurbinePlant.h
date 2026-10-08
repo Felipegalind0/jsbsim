@@ -419,6 +419,9 @@ public:
   const PlantState& State() const { return state_; }
   /** Replaces the state after validation; does not refresh. */
   bool RestoreState(const PlantState& state, std::string* reason = nullptr);
+  /** Establishes one solid at a restored temperature (K), as the legacy
+      metal-temperature-state property does; false if invalid. */
+  bool SetSolidTemperature(std::size_t index, double kelvin);
   const PlantOutputs& Outputs() const { return out_; }
   PlantOutputs& MutableOutputs() { return out_; }
 
@@ -465,7 +468,7 @@ private:
   }
   bool DeriveDesign();
   void RecordEvent(double t, int code);
-  void UpdateController(const PlantInputs& in, PlantState& s, double dt, double& coreCmd, double& abCmd, double& starterTorque, double& throatCmd) const;
+  void UpdateController(const PlantInputs& in, PlantState& s, double dt, double& coreCmd, double& abCmd, double& starterTorque, double& throatCmd);
   bool EvaluatePath(const Operating& op, const double* x, GasPath& g, double* residual) const;
   void OperatingFromState(const PlantState& s, const PlantInputs& in, Algorithm algorithm,
                           Operating& op) const;
@@ -484,6 +487,18 @@ private:
 
 /** Validates numeric ranges of settings; returns false if out of bounds. */
 bool ValidSettings(const NumericalSettings& settings);
+
+/** Flat numeric record of a PlantState for staged capture and restore
+    through properties: kStateFixedFields named fields, then a temperature
+    (K) and an initialized flag for each solid. Booleans are 0 or 1. The
+    record carries the warm-start flows so a restored step starts where the
+    captured one would have. */
+constexpr int kStateFixedFields = 42;
+inline int StateRecordSize(std::size_t solids) { return kStateFixedFields + 2 * static_cast<int>(solids); }
+const char* StateRecordName(int index);
+void PackState(const PlantState& state, double* record);
+/** Fills state from a record; false if a flag is not 0/1 or a value is not finite. */
+bool UnpackState(const double* record, std::size_t solids, PlantState& state);
 
 } // namespace TurbinePlant
 } // namespace JSBSim

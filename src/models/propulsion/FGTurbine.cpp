@@ -50,6 +50,7 @@ INCLUDES
 #include "math/FGRealValue.h"
 #include "math/FGParameterValue.h"
 #include "FGTurbine.h"
+#include "plant/TurbinePlant.h"
 #include "FGThruster.h"
 #include "input_output/FGXMLElement.h"
 #include "input_output/string_utilities.h"
@@ -116,6 +117,7 @@ void FGTurbine::ResetToIC(void)
   ThermalABFuelKgSec = ThermalDryFuelPph = 0.0;
   ThermalABBurnedFuelKgSec = 0.0;
   ThermalValid = false;
+  if (PlantModel) ResetPlant();
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -137,6 +139,14 @@ void FGTurbine::Calculate(void)
     ThrottlePos -= AugmentCmd;
   } else {
     AugmentCmd = 0.0;
+  }
+
+  if (PlantModel) {
+    const double plantThrust = CalculatePlant();
+    LoadThrusterInputs();
+    Thruster->Calculate(plantThrust);
+    RunPostFunctions();
+    return;
   }
 
   // When trimming is finished check if user wants engine OFF or RUNNING
@@ -446,6 +456,14 @@ double FGTurbine::Trim()
 
 double FGTurbine::CalcFuelNeed(void)
 {
+  if (PlantModel) {
+    // Exactly the fuel the plant metered over the accepted step, already
+    // limited to what the feed tanks could deliver.
+    FuelExpended = PlantStepFuelLbs();
+    FuelFlowRate = in.TotalDeltaT > 0.0 ? FuelExpended / in.TotalDeltaT : 0.0;
+    if (!Starved) FuelUsedLbs += FuelExpended;
+    return FuelExpended;
+  }
   FuelFlowRate = FuelFlow_pph / 3600.0; // Calculates flow in lbs/sec from lbs/hr
   FuelExpended = FuelFlowRate * in.TotalDeltaT;     // Calculates fuel expended in this time step
   if (!Starved) FuelUsedLbs += FuelExpended;
@@ -748,6 +766,7 @@ bool FGTurbine::Load(FGFDMExec* exec, Element *el)
 {
   // Parse and validate constants before engine properties are tied: a rejected
   // model must not leave bindings to an engine that failed construction.
+  LoadPlant(exec, el);
   LoadThermal(exec, el);
   Element* function_element = el->FindElement("function");
 
@@ -959,6 +978,7 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
   PropertyManager->Tie(property_name.c_str(), &correctedTSFC);
   auto node = PropertyManager->GetNode(property_name.c_str(), false);
   node->setAttribute(SGPropertyNode::WRITE, false);
+  if (PlantModel) BindPlant(PropertyManager);
   if (Thermal) {
     const string thermal = base_property_name + "/thermal/";
     PropertyManager->Tie(thermal + "nozzle-gas-temperature-k", this,
@@ -1016,6 +1036,17 @@ void FGTurbine::bindmodel(FGPropertyManager* PropertyManager)
 
 int FGTurbine::InitRunning(void)
 {
+  if (PlantModel) {
+    // A steady running operating point at the present controls; solids not
+    // yet established take their equilibrium there.
+    FDMExec->SuspendIntegration();
+    ThrottlePos = std::clamp(in.ThrottlePos[EngineNumber], 0.0, 1.0);
+    Cutoff = false;
+    InitializePlantRunning();
+    Calculate();
+    FDMExec->ResumeIntegration();
+    return phase = Running ? tpRun : tpOff;
+  }
   // This shortcut requests a warm initial operating point only before thermal
   // evolution/restoration. Seed on the first real step, after final IC inputs;
   // GetSteadyState's artificial trim dt must not age or initialize the wall.
