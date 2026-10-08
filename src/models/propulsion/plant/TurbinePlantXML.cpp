@@ -323,6 +323,9 @@ PlantConfig ReadPlantConfig(Element* plant, NumericalSettings& settings)
     Number(l, "roll-post-velocity-coefficient", lift.rollPostVelocityCoefficient);
     Number(l, "roll-post-rate-per-sec", lift.rollPostRate);
     Number(l, "bypass-entry-area-factor", lift.bypassEntryAreaFactor);
+    Number(l, "bypass-entry-door-full", lift.bypassEntryDoorFull);
+    if (!(lift.bypassEntryDoorFull > 0.0 && lift.bypassEntryDoorFull <= 1.0))
+      Fail(l, "<bypass-entry-door-full> is in (0, 1].");
   }
 
   if (Element* n = plant->FindElement("numerics")) {

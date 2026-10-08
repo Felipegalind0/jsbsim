@@ -183,12 +183,18 @@ struct LiftSystemConfig {
   double rollPostDischarge = 0.95;
   double rollPostVelocityCoefficient = 0.97;
   double rollPostRate = 2.0;       ///< fraction per second
-  /// Bypass entry area into the mixer at full clutch engagement, as a
-  /// fraction of its design area. A declared surrogate for however the real
-  /// engine holds its fan operating line while the nozzle opens in lift mode:
-  /// a smaller entry chokes the bypass stream, so fan pressure and core
-  /// supercharge stay up as turbine exit pressure falls. 1 disables it.
+  /// Bypass entry area into the mixer with the clutch engaged and the
+  /// lift-fan nozzle open, as a fraction of its design area. A declared
+  /// surrogate for however the real engine holds its fan operating line while
+  /// the nozzle opens in lift mode: a smaller entry chokes the bypass stream,
+  /// so fan pressure and core supercharge stay up as turbine exit pressure
+  /// falls. 1 disables it.
   double bypassEntryAreaFactor = 1.0;
+  /// Lift-fan nozzle opening, in (0, 1], at which the bypass entry reaches
+  /// its factor; it moves in proportion to clutch x opening below it. With
+  /// the nozzle nearly closed the fan takes no load, and a blocked bypass
+  /// would leave the LP turbine's power nowhere to go.
+  double bypassEntryDoorFull = 1.0;
 };
 
 struct DesignSpec {

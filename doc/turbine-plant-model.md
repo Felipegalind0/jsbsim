@@ -47,13 +47,23 @@ from the bypass duct. The controller adds:
   throat. Closed vanes are washed out (`lift-split-washout-per-sec`) by
   closing the throat, which raises jet thrust, until the vanes are open again
   or the throat is at its minimum. The trim never winds up past the area
-  limits and relaxes to 1 when the split is idle.
+  limits and relaxes to 1 when the split is idle. The loop takes authority
+  as lift-fan thrust rises from 1 % to 2 % of design thrust (with the clutch
+  engaged), relaxing with the rest, so it never switches on and off as a
+  lift fan spools through a threshold.
 - An LP speed limit, `max-n1` (off by default): with the fan engaged, an N1
   above it opens the vanes and closes the throat, which takes power off the
   LP turbine faster than fuel can when the fan unloads (a closing conversion).
 - `bypass-entry-area-factor`: the mixer's bypass entry shrinks with clutch
-  engagement. A declared surrogate for however the real engine holds its fan
-  operating line while the nozzle opens in lift mode; 1 disables it.
+  engagement and the lift-fan nozzle opening, reaching the factor once the
+  opening is `bypass-entry-door-full` (default 1) and moving in proportion
+  below it. A declared surrogate for however the real engine holds its fan
+  operating line while the nozzle opens in lift mode; 1 disables it. Scaled
+  by the clutch alone, an engaged clutch with a nearly closed lift-fan nozzle
+  blocked the bypass while the fan took no load (in the F135 configuration,
+  1 % conversion at full throttle left the core at 83 % N2); scaled by the
+  full opening, the fan was too weak to hold the split at partial
+  conversion.
 
 The steady solve holds the commanded split with the throat area as the
 unknown; when the answer lies beyond an area limit it holds the limit, and
@@ -158,6 +168,7 @@ the defaults in `TurbinePlant.h`. Tables are one `x y` pair per line.
     <lift-system>                     <!-- optional -->
       ...
       <bypass-entry-area-factor>1</bypass-entry-area-factor>
+      <bypass-entry-door-full>1</bypass-entry-door-full>
       <clutch-command>fcs/lift-fan-clutch-norm</clutch-command>
       <thrust-split-command>fcs/lift-split</thrust-split-command>
       <door-command>fcs/lift-fan-door-norm</door-command>

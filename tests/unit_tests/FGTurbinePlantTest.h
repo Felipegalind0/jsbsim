@@ -51,6 +51,17 @@ struct Trace {
   double time, n1, n2, thrust, abBurned, abSpray, coreBurned, t6, t7;
 };
 
+/** Sea-level ISA flight at true airspeed V (m/s): static and total conditions. */
+void Flight(PlantInputs& in, double V)
+{
+  const double a = std::sqrt(1.4 * 287.05 * in.ambientTemperature);
+  const double ratio = 1.0 + 0.2 * (V / a) * (V / a);
+  in.airspeed = V;
+  in.mach = V / a;
+  in.totalTemperature = in.ambientTemperature * ratio;
+  in.totalPressure = in.ambientPressure * std::pow(ratio, 3.5);
+}
+
 /** Runs a scripted transient and checks every accepted step's ledger. */
 class Run {
 public:
@@ -737,6 +748,81 @@ public:
     TS_ASSERT(run.For(0.5));
     TS_ASSERT_LESS_THAN(std::fabs(ratio() - 0.37), 0.3 * 0.05);
     TS_ASSERT_LESS_THAN(run.plant.State().control.splitVane, 1.0);
+    TS_ASSERT(!run.failed);
+    TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
+    TS_ASSERT_LESS_THAN_EQUALS(run.worstMass, 1e-6);
+  }
+
+  void testCutOffLiftFanSpoolsDownSmoothly()
+  {
+    // After cutoff the split loop gives up its authority as the lift fan's
+    // thrust falls through 2 % to 1 % of design thrust: no switching on and
+    // off, so the outlet thrust falls on every step, and no rotor gains energy.
+    Run run(true);
+    TS_ASSERT(run.StartRunning(0.9));
+    run.in.clutchCommand = 1.0;
+    run.in.doorCommand = 1.0;
+    run.in.liftSplit = 0.42;
+    TS_ASSERT(run.For(8.0));
+    run.in.cutoff = true;
+    TS_ASSERT(run.For(0.5));
+    const auto rotorEnergy = [&run]() {
+      const PlantState& s = run.plant.State();
+      const PlantConfig& c = run.plant.Config();
+      return 0.5 * (c.lp.inertia * s.omegaLP * s.omegaLP + c.hp.inertia * s.omegaHP * s.omegaHP
+                    + c.lift.fanShaft.inertia * s.omegaLF * s.omegaLF);
+    };
+    double thrust = run.plant.Outputs().liftFan.grossThrust, energy = rotorEnergy();
+    int rises = 0;
+    for (int i = 0; i < 1200; ++i) {
+      TS_ASSERT(run.Step());
+      const double now = run.plant.Outputs().liftFan.grossThrust;
+      rises += now > thrust;
+      TS_ASSERT_LESS_THAN_EQUALS(rotorEnergy(), energy);
+      thrust = now;
+      energy = rotorEnergy();
+    }
+    TS_ASSERT_EQUALS(rises, 0);
+    TS_ASSERT_LESS_THAN(thrust, 0.01 * run.plant.Design().thrust);
+  }
+
+  void testSteadyConversionAtForwardSpeed()
+  {
+    // From conventional flight the steady solve reaches the converted point
+    // at any airspeed. It starts with the lift fan stopped, where ram air
+    // already passes the open nozzle, so the residual must be continuous
+    // in fan speed there.
+    for (const double V : {0.0, 10.0, 40.0, 80.0}) {
+      Run run(true);
+      Flight(run.in, V);
+      TS_ASSERT(run.StartRunning(0.9));
+      TS_ASSERT_EQUALS(run.plant.Outputs().liftFan.grossThrust, 0.0);
+      PlantInputs zero = run.in;
+      zero.advance = false;
+      zero.clutchCommand = 1.0;
+      zero.doorCommand = 1.0;
+      zero.liftSplit = 0.42;
+      TS_ASSERT(run.plant.Steady(zero));
+      const PlantOutputs& o = run.plant.Outputs();
+      TS_ASSERT_DELTA(o.liftFan.grossThrust / o.nozzle.grossThrust, 0.42, 1e-6);
+      TS_ASSERT_EQUALS(run.plant.State().clutch, 1.0);
+    }
+  }
+
+  void testStoppedLiftFanPassesRamFlow()
+  {
+    // Nozzle open, clutch released, in forward flight: ram air flows through
+    // the stopped fan and windmills it; the engine gives it no power.
+    Run run(true);
+    Flight(run.in, 60.0);
+    TS_ASSERT(run.StartRunning(0.6));
+    run.in.doorCommand = 1.0;
+    TS_ASSERT(run.For(0.5));
+    const PlantOutputs& o = run.plant.Outputs();
+    TS_ASSERT_EQUALS(run.plant.State().clutch, 0.0);
+    TS_ASSERT_EQUALS(o.clutchTorque, 0.0);
+    TS_ASSERT_LESS_THAN(0.0, o.liftFan.massFlow);
+    TS_ASSERT_LESS_THAN(0.0, run.plant.State().omegaLF);
     TS_ASSERT(!run.failed);
     TS_ASSERT_LESS_THAN_EQUALS(run.worstEnergy, 1e-5);
     TS_ASSERT_LESS_THAN_EQUALS(run.worstMass, 1e-6);

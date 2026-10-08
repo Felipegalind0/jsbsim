@@ -769,13 +769,17 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
   // lift-fan thrust is the commanded multiple of main-nozzle thrust. Closing
   // the nozzle raises jet thrust and takes work from the LP turbine. The
   // trim is held inside the area limits (no windup) and relaxes when idle.
+  // The loop takes authority as the lift fan's thrust rises from 1 % to 2 %
+  // of design thrust, and relaxes with the rest: a threshold switched it on
+  // and off on alternate steps as a cut-off lift fan spooled down through it.
   const double liftScale = std::max(1.0, design_.thrust);
-  const bool splitActive = config_.lift.present && in.liftSplit > 0.0 && s.clutch > 0.5
-    && cs.sensedLiftThrust > 0.02 * liftScale && cs.sensedMainThrust > 0.0;
-  if (splitActive) {
+  const double authority = config_.lift.present && in.liftSplit > 0.0 && s.clutch > 0.5
+    && cs.sensedMainThrust > 0.0
+    ? std::clamp((cs.sensedLiftThrust / liftScale - 0.01) / 0.01, 0.0, 1.0) : 0.0;
+  if (authority > 0.0) {
     const double wanted = in.liftSplit * cs.sensedMainThrust;
     const double error = (cs.sensedLiftThrust - wanted) / (cs.sensedLiftThrust + wanted);
-    const double step = std::exp(-c.liftSplitGain * error * dt);
+    const double step = std::exp(-c.liftSplitGain * authority * error * dt);
     // The guide vanes act at once in either direction while they have
     // travel; with them fully open, a fan that is too weak is met by opening
     // the throat. Closed vanes are washed out by closing the throat, which
@@ -792,10 +796,11 @@ void Plant::UpdateController(const PlantInputs& in, PlantState& s, double dt, do
       cs.splitTrim *= std::exp(-c.maxN1Gain * overspeed * dt);
     }
     cs.splitVane = std::clamp(cs.splitVane, c.liftVaneMin, 1.0);
-    cs.splitTrim *= std::exp(-c.liftSplitWashout * (1.0 - cs.splitVane) * dt);
+    cs.splitTrim *= std::exp(-c.liftSplitWashout * authority * (1.0 - cs.splitVane) * dt);
     cs.splitTrim = std::clamp(cs.splitTrim, design_.throatMin / area, design_.throatMax / area);
-  } else {
-    const double relax = -std::expm1(-dt / 0.5);
+  }
+  if (authority < 1.0) {
+    const double relax = (1.0 - authority) * -std::expm1(-dt / 0.5);
     cs.splitTrim += (1.0 - cs.splitTrim) * relax;
     cs.splitVane += (1.0 - cs.splitVane) * relax;
   }
@@ -986,7 +991,9 @@ bool Plant::EvaluatePath(const Operating& op, const double* x, GasPath& g, doubl
   Stream s16m = s16; s16m.W = W16;
   MixerGeometry mixer = design_.mixerGeometry;
   if (config_.lift.present)
-    mixer.bypassArea *= 1.0 + (config_.lift.bypassEntryAreaFactor - 1.0) * op.clutch;
+    // With the lift fan engaged and taking load: clutch and door.
+    mixer.bypassArea *= 1.0 + (config_.lift.bypassEntryAreaFactor - 1.0) * op.clutch
+      * std::min(1.0, op.door / config_.lift.bypassEntryDoorFull);
   const MixerResult mixed = MixAtStaticPressure(gas, s5, s16m, mixer);
   if (!mixed.valid) return false;
   residual[1] = op.bypassBlocked ? W16raw / bypassScale : (s16.Pt - mixed.bypassRequiredPt) / pScale;
@@ -1056,7 +1063,9 @@ bool Plant::EvaluatePath(const Operating& op, const double* x, GasPath& g, doubl
         / std::max(1e-3 * op.p0, 0.5 * (std::fabs(cr.out.Pt - op.p0) + std::fabs(nr.requiredPt - op.p0)));
     };
     CompressorResult cr; NozzleResult nr;
-    if (ng.throatArea > 0.0 && op.wLF > 0.0) {
+    // A stopped fan is a loss, not a wall: with the nozzle open, ram drives
+    // air through it (and windmills it), so the flow is continuous in speed.
+    if (ng.throatArea > 0.0) {
       const double f0 = excess(0.0, cr, nr);
       if (!Finite(f0)) return false;
       if (f0 > 0.0) {

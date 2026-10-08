@@ -69,6 +69,21 @@
       "definition": "N1 excess over a limit 0.4 points above the running N1 while the lift-fan door closes with the split following it, with and without the limit",
       "gate": "limited excess < 0.5 x unlimited excess",
       "test": "FGTurbinePlantTest::testLpSpeedLimitHoldsWhileTheFanUnloads"
+    },
+    "steady_conversion_forward_speed": {
+      "definition": "zero-time steady solve from a conventional running point to clutch and door engaged with a commanded split, at 0, 10, 40 and 80 m/s",
+      "gate": "converges at every speed and holds the split to 1e-6",
+      "test": "FGTurbinePlantTest::testSteadyConversionAtForwardSpeed"
+    },
+    "stopped_fan_ram_flow": {
+      "definition": "lift-fan flow with the nozzle open, the clutch released and the fan stopped, at 60 m/s",
+      "gate": "ram flow > 0, the fan windmills, clutch torque 0, ledgers within the step gates",
+      "test": "FGTurbinePlantTest::testStoppedLiftFanPassesRamFlow"
+    },
+    "split_loop_spool_down": {
+      "definition": "lift-fan gross thrust and rotor kinetic energy on every step for 10 s after cutoff from a held split",
+      "gate": "no step on which either rises; final lift-fan thrust < 1 % of design thrust",
+      "test": "FGTurbinePlantTest::testCutOffLiftFanSpoolsDownSmoothly"
     }
   }
 }
