@@ -84,6 +84,11 @@
       "definition": "lift-fan gross thrust and rotor kinetic energy on every step for 10 s after cutoff from a held split",
       "gate": "no step on which either rises; final lift-fan thrust < 1 % of design thrust",
       "test": "FGTurbinePlantTest::testCutOffLiftFanSpoolsDownSmoothly"
+    },
+    "augmentor_cold_inlet": {
+      "definition": "augmentor selection, burning and the steady solve at full power with a -50 C inlet, where physical N2 is below augmentor-minimum-n2 and corrected N2 above it",
+      "gate": "selected and burning after 5 s; the steady solve selects it",
+      "test": "FGTurbinePlantTest::testAugmentorSelectableAtAColdInlet"
     }
   }
 }
